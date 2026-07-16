@@ -158,4 +158,4 @@ installers on your behalf.
    Bluetooth.
 
 ## License
-See `LICENSE`.
+See [`LICENSE`](https://github.com/zerrinsiya/WireMerge/blob/3700f7db4441e250e11a3fbdb8e0a797f4465369/LICENSE).
