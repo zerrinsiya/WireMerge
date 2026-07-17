@@ -5,7 +5,7 @@ A lightweight Windows utility that lets you plug in USB audio sources
 similar to how Bluetooth audio pairing works, but over USB, and without
 needing a full DAW or resource-heavy mixing app running.
 
-## How it actually works:
+## How it works:
 
 The original plan called for reading raw audio directly off the USB bus
 with `libusb`. In practice, once Windows recognizes a plugged-in device as
