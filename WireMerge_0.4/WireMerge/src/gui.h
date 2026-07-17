@@ -57,9 +57,11 @@ public:
 
 private:
     void RenderFrame();
+    void RenderOutputPanel();
+    void RenderInputsPanel();
+    void RenderInputsPanel_PcSubsection();
+    void RenderInputsPanel_AndroidSubsection();
     void RenderSourcesPanel();
-    void RenderDevicesPanel();
-    void RenderAndroidPanel();
     void RenderLogPanel();
     void DrainUsbEventQueue();
     void PushLogLine(const std::string& line);

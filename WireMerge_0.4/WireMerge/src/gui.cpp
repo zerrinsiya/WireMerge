@@ -1,6 +1,5 @@
 #include "gui.h"
 #include "utils.h"
-#include <unordered_map>
 
 #include <d3d11.h>
 #include <windows.h>
@@ -171,14 +170,14 @@ void Gui::DrainUsbEventQueue() {
     }
 }
 
-void Gui::RenderDevicesPanel() {
-    // First-launch-only default layout so the four panels don't all stack
-    // on top of each other on a fresh run -- ImGuiCond_FirstUseEver means
-    // this is ignored once imgui.ini has a remembered position (e.g. after
-    // the user has dragged panels around), so it doesn't fight manual
-    // layout on subsequent launches.
+void Gui::RenderOutputPanel() {
+    // First-launch-only default layout so panels don't all stack on top of
+    // each other on a fresh run -- ImGuiCond_FirstUseEver means this is
+    // ignored once imgui.ini has a remembered position (e.g. after the
+    // user has dragged panels around), so it doesn't fight manual layout
+    // on subsequent launches.
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420, 300), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(400, 260), ImGuiCond_FirstUseEver);
     ImGui::Begin("Output Device");
 
     // Styled red so it reads as a distinct/deliberate action, not just
@@ -207,23 +206,10 @@ void Gui::RenderDevicesPanel() {
         if (d.index == selectedOutputDevice_) preview = d.name;
     }
 
-    // Only fingerprint devices whose name collides with another device in
-    // the same list -- the common case (one device per name) stays clean;
-    // the fingerprint only appears where it's actually needed to tell two
-    // physically distinct devices apart (e.g. two identical-model USB
-    // mics plugged in at once). See wasapi_identity.h for why this is a
-    // real persistent hardware ID, not just another display string.
-    std::unordered_map<std::string, int> outputNameCounts;
-    for (auto& d : outputs) outputNameCounts[d.name]++;
-
     if (ImGui::BeginCombo("Output", preview.c_str())) {
         for (auto& d : outputs) {
             bool selected = (d.index == selectedOutputDevice_);
             std::string label = d.name + (d.isDefaultOutput ? " (default)" : "");
-            if (outputNameCounts[d.name] > 1) {
-                std::string fp = audio_.GetDeviceFingerprint(d, /*isInput=*/false);
-                if (!fp.empty()) label += " [" + fp + "]";
-            }
             if (ImGui::Selectable(label.c_str(), selected)) {
                 selectedOutputDevice_ = d.index;
             }
@@ -251,26 +237,22 @@ void Gui::RenderDevicesPanel() {
     }
     ImGui::EndDisabled();
 
-    ImGui::Separator();
-    ImGui::TextWrapped("Add an input source below (this is where your phone/TV shows up "
-                        "once Windows has enumerated it as a recording device).");
+    ImGui::End();
+}
+
+void Gui::RenderInputsPanel_PcSubsection() {
+    ImGui::TextWrapped("USB microphones, DACs, and audio interfaces -- "
+                        "anything Windows already shows as a recording device.");
 
     static int selectedInput = -1;
     auto inputs = audio_.ListInputDevices();
     std::string inPreview = "Choose input...";
     for (auto& d : inputs) if (d.index == selectedInput) inPreview = d.name;
 
-    std::unordered_map<std::string, int> inputNameCounts;
-    for (auto& d : inputs) inputNameCounts[d.name]++;
-
     if (ImGui::BeginCombo("Input", inPreview.c_str())) {
         for (auto& d : inputs) {
             bool selected = (d.index == selectedInput);
             std::string label = d.name + (d.isDefaultInput ? " (default)" : "");
-            if (inputNameCounts[d.name] > 1) {
-                std::string fp = audio_.GetDeviceFingerprint(d, /*isInput=*/true);
-                if (!fp.empty()) label += " [" + fp + "]";
-            }
             if (ImGui::Selectable(label.c_str(), selected)) selectedInput = d.index;
         }
         ImGui::EndCombo();
@@ -286,18 +268,149 @@ void Gui::RenderDevicesPanel() {
 
     if (ImGui::Button("Rescan Devices")) {
         PushLogLine("Rescanned devices.");
-        // ListInputDevices()/ListOutputDevices() re-query PortAudio live,
-        // so nothing else needs to happen here besides the log entry --
-        // Pa_GetDeviceCount() reflects hotplug changes automatically on
-        // most WASAPI backends.
+        // ListInputDevices()/ListOutputDevices() re-query PortAudio live
+        // and are cheap in-memory lookups (unlike the ADB device list --
+        // see the Android subsection below), so nothing else needs to
+        // happen here besides the log entry.
+    }
+}
+
+void Gui::RenderInputsPanel_AndroidSubsection() {
+    if (!adb_.IsAvailable()) {
+        ImGui::TextWrapped(
+            "Not set up: adb.exe and sndcpy.apk weren't found in the 'tools' "
+            "folder next to WireMerge.exe. WireMerge already tried a one-time "
+            "automatic download on startup (check the Log panel for whether "
+            "that succeeded or failed) -- if it failed, likely due to no "
+            "internet access, see README.md for manual download links, or "
+            "just restart WireMerge once you're back online.");
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "Captures an app's audio (e.g. Spotify) from the phone itself, over "
+        "the same USB cable used for charging/data. Requires USB debugging "
+        "enabled on the phone (one-time authorization prompt), and each "
+        "time capture starts, an on-device prompt to confirm screen/audio "
+        "capture (normal Android behavior, not a bug). Not all apps allow "
+        "this -- most do, some DRM-guarded streaming apps don't.");
+    ImGui::Separator();
+
+    static std::string selectedSerial;
+
+    // adb_.ListDevices() spawns an actual adb.exe subprocess -- calling
+    // that unconditionally every render frame was launching a process
+    // 30-60+ times per second on the render thread, which was the actual
+    // cause of general UI stutter/dragging jank (not a scheduling-priority
+    // issue). Cached to a 2s interval, plus an explicit Rescan button.
+    constexpr double kRescanIntervalMs = 2000.0;
+    static std::vector<AdbDeviceInfo> cachedDevices;
+    static double lastScanTime = -kRescanIntervalMs; // force an initial scan on first frame
+
+    double now = ImGui::GetTime() * 1000.0;
+    if (now - lastScanTime >= kRescanIntervalMs) {
+        cachedDevices = adb_.ListDevices();
+        lastScanTime = now;
+    }
+
+    if (ImGui::SmallButton("Rescan Now")) {
+        cachedDevices = adb_.ListDevices();
+        lastScanTime = now;
+    }
+
+    if (cachedDevices.empty()) {
+        ImGui::TextDisabled("No devices detected. Plug in a phone with USB debugging enabled.");
+    }
+
+    for (auto& d : cachedDevices) {
+        bool isSelected = (d.serial == selectedSerial);
+        std::string label = d.serial + " [" + d.state + "]";
+        if (ImGui::RadioButton(label.c_str(), isSelected)) {
+            selectedSerial = d.serial;
+        }
+    }
+
+    // Poll for a just-finished async start every frame, regardless of
+    // whether this device is currently selected -- a start kicked off
+    // earlier should still get its result consumed and logged even if the
+    // user has since clicked a different device's radio button.
+    for (auto& d : cachedDevices) {
+        SourceId result;
+        if (adb_.TryTakeStartResult(d.serial, result)) {
+            if (result != 0) {
+                PushLogLine("Started Android capture for " + d.serial + " (source added).");
+            } else {
+                PushLogLine("Failed to start Android capture for " + d.serial +
+                            " -- check log file for details.");
+            }
+        }
+    }
+
+    bool starting = !selectedSerial.empty() && adb_.IsStarting(selectedSerial);
+    bool canStart = !selectedSerial.empty() && !starting;
+
+    ImGui::BeginDisabled(!canStart);
+    if (ImGui::Button("Start Android Capture")) {
+        // Async: the install/forward/launch sequence involves several
+        // adb.exe round-trips and can take up to ~10s (an APK install
+        // alone can be several seconds) -- running that synchronously on
+        // this button's call stack previously froze the whole window
+        // (Windows marks a window "not responding" once its message loop
+        // stops pumping, which is exactly what a blocked render thread
+        // does). Now runs on a background thread; see the "starting..."
+        // status text below for the in-progress state.
+        adb_.StartCaptureAsync(mixer_, selectedSerial);
+        PushLogLine("Starting Android capture for " + selectedSerial +
+                    "... this can take up to ~10s (installing/launching on "
+                    "the phone). The window will stay responsive.");
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(selectedSerial.empty() || starting);
+    if (ImGui::Button("Stop Android Capture")) {
+        adb_.StopCapture(selectedSerial);
+        PushLogLine("Stopped Android capture for " + selectedSerial);
+    }
+    ImGui::EndDisabled();
+
+    if (starting) {
+        ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f),
+                            "Starting capture on %s... check the phone screen "
+                            "for a permission prompt.", selectedSerial.c_str());
+    }
+}
+
+void Gui::RenderInputsPanel() {
+    ImGui::SetNextWindowPos(ImVec2(440, 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(440, 380), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Inputs");
+
+    // Two clearly separated subsections in one window rather than two
+    // separate top-level windows -- Android capture is the app's main
+    // feature, not a secondary/bolted-on one, so it belongs alongside
+    // regular PC inputs as another input source type, not off in its own
+    // disconnected panel.
+    if (ImGui::CollapsingHeader("PC Inputs", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Indent();
+        RenderInputsPanel_PcSubsection();
+        ImGui::Unindent();
+    }
+
+    ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("Devices (Android)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Indent();
+        RenderInputsPanel_AndroidSubsection();
+        ImGui::Unindent();
     }
 
     ImGui::End();
 }
 
 void Gui::RenderSourcesPanel() {
-    ImGui::SetNextWindowPos(ImVec2(460, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420, 300), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(20, 300), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(400, 320), ImGuiCond_FirstUseEver);
     ImGui::Begin("Active Sources");
 
     auto sources = mixer_.ListSources();
@@ -331,11 +444,8 @@ void Gui::RenderSourcesPanel() {
         }
 
         // Live underrun indicator -- rising quickly means this source's
-        // buffer is running dry (audible gaps/stutter). This is the actual
-        // diagnostic signal for the stutter reports: previously an
-        // underrun failed completely silently, so there was no way to
-        // see when/how badly it was happening. Color-coded so it's
-        // visible at a glance without reading exact numbers.
+        // buffer is running dry (audible gaps/stutter). Color-coded so
+        // it's visible at a glance without reading exact numbers.
         uint64_t underrunFrames = mixer_.GetUnderrunFrames(s.id);
         double underrunMs = static_cast<double>(underrunFrames) / 48000.0 * 1000.0; // approximation; exact rate varies per source
         ImVec4 color = underrunMs < 50.0 ? ImVec4(0.5f, 0.5f, 0.5f, 1.0f)
@@ -350,100 +460,15 @@ void Gui::RenderSourcesPanel() {
     ImGui::End();
 }
 
-void Gui::RenderAndroidPanel() {
-    ImGui::SetNextWindowPos(ImVec2(20, 340), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420, 220), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Android (ADB)");
-
-    if (!adb_.IsAvailable()) {
-        ImGui::TextWrapped(
-            "Not set up: adb.exe and sndcpy.apk weren't found in the 'tools' "
-            "folder next to WireMerge.exe. WireMerge already tried a one-time "
-            "automatic download on startup (check the Log panel below for "
-            "whether that succeeded or failed) -- if it failed, likely due to "
-            "no internet access, see README.md for manual download links, or "
-            "just restart WireMerge once you're back online.");
-        ImGui::End();
-        return;
-    }
-
-    ImGui::TextWrapped(
-        "Captures an app's audio (e.g. Spotify) from the phone itself, over "
-        "the same USB cable used for charging/data -- this is different "
-        "from the USB mic/DAC input above. Requires USB debugging enabled "
-        "on the phone; you'll get a one-time authorization prompt on the "
-        "device, and each time capture starts, an on-device prompt to "
-        "confirm screen/audio capture (this is normal Android behavior, "
-        "not a bug). Not all apps allow this -- most do, some DRM-guarded "
-        "streaming apps don't.");
-    ImGui::Separator();
-
-    static std::string selectedSerial;
-
-    // adb_.ListDevices() spawns an actual adb.exe subprocess (see
-    // AdbHandler::RunAdb) -- calling that unconditionally every render
-    // frame was launching a process 30-60+ times per second on the render
-    // thread, which is what was actually causing the general UI stutter/
-    // jank while dragging windows, not a scheduling-priority issue. Now
-    // cached and only re-queried once per kRescanIntervalMs, or on demand
-    // via the explicit Rescan button below.
-    constexpr double kRescanIntervalMs = 2000.0;
-    static std::vector<AdbDeviceInfo> cachedDevices;
-    static double lastScanTime = -kRescanIntervalMs; // force an initial scan on first frame
-
-    double now = ImGui::GetTime() * 1000.0;
-    if (now - lastScanTime >= kRescanIntervalMs) {
-        cachedDevices = adb_.ListDevices();
-        lastScanTime = now;
-    }
-
-    if (ImGui::SmallButton("Rescan Now")) {
-        cachedDevices = adb_.ListDevices();
-        lastScanTime = now;
-    }
-
-    if (cachedDevices.empty()) {
-        ImGui::TextDisabled("No devices detected. Plug in a phone with USB debugging enabled.");
-    }
-
-    for (auto& d : cachedDevices) {
-        bool isSelected = (d.serial == selectedSerial);
-        std::string label = d.serial + " [" + d.state + "]";
-        if (ImGui::RadioButton(label.c_str(), isSelected)) {
-            selectedSerial = d.serial;
-        }
-    }
-
-    bool canStart = !selectedSerial.empty();
-    ImGui::BeginDisabled(!canStart);
-    if (ImGui::Button("Start Android Capture")) {
-        SourceId id = adb_.StartCapture(mixer_, selectedSerial);
-        if (id != 0) {
-            PushLogLine("Started Android capture for " + selectedSerial +
-                        " -- check the phone screen for a capture-permission prompt.");
-        } else {
-            PushLogLine("Failed to start Android capture -- check log file for details.");
-        }
-    }
-    ImGui::EndDisabled();
-
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!canStart);
-    if (ImGui::Button("Stop Android Capture")) {
-        adb_.StopCapture(selectedSerial);
-        PushLogLine("Stopped Android capture for " + selectedSerial);
-    }
-    ImGui::EndDisabled();
-
-    ImGui::End();
-}
-
 void Gui::RenderLogPanel() {
-    ImGui::SetNextWindowPos(ImVec2(460, 340), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420, 220), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(440, 420), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(440, 200), ImGuiCond_FirstUseEver);
     ImGui::Begin("Log");
+    // TextUnformatted never wraps regardless of window width -- that's
+    // why log lines were clipping off-screen instead of wrapping.
+    // TextWrapped wraps to the current content region width automatically.
     for (auto& line : logLines_) {
-        ImGui::TextUnformatted(line.c_str());
+        ImGui::TextWrapped("%s", line.c_str());
     }
     if (!logLines_.empty()) ImGui::SetScrollHereY(1.0f);
     ImGui::End();
@@ -496,9 +521,9 @@ void Gui::RenderFrame() {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    RenderDevicesPanel();
+    RenderOutputPanel();
+    RenderInputsPanel();
     RenderSourcesPanel();
-    RenderAndroidPanel();
     RenderLogPanel();
 
     ImGui::Render();

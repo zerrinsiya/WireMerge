@@ -73,15 +73,28 @@ public:
     std::vector<AdbDeviceInfo> ListDevices() const;
 
     // Installs the helper app (if not already installed), grants the
-    // capture permission, sets up the forward tunnel, launches the app,
-    // and starts a background thread reading PCM off the socket into
-    // `mixer` as a new source. Returns the new SourceId, or 0 on failure.
-    // sampleRate/channels must match what the helper actually emits
-    // (sndcpy emits 48000 Hz stereo 16-bit PCM; converted to float32 here
-    // before handing to the mixer, since Mixer/RingBuffer work in float32
-    // throughout to stay consistent with the PortAudio path).
-    SourceId StartCapture(Mixer& mixer, const std::string& deviceSerial,
-                           int localPort = 28200);
+    // capture permission, sets up the forward tunnel, and launches the
+    // app -- then starts a background reader thread once connected. This
+    // whole setup sequence involves several `adb.exe` round-trips (an APK
+    // install can genuinely take several seconds) and previously ran
+    // synchronously on whichever thread called it, which -- when called
+    // directly from a GUI button handler -- froze the render thread and
+    // made Windows mark the window "not responding" for up to ~10s. Now
+    // runs on its own background thread; poll IsStarting()/TryTakeStartResult()
+    // from the GUI's render loop instead of blocking on this call.
+    void StartCaptureAsync(Mixer& mixer, const std::string& deviceSerial, int localPort = 28200);
+
+    // True while a StartCaptureAsync() call for this device is still in
+    // progress (install/forward/launch sequence not yet finished).
+    bool IsStarting(const std::string& deviceSerial) const;
+
+    // Non-blocking poll for a finished StartCaptureAsync() call. Returns
+    // true exactly once per completed start (and consumes/removes the
+    // pending-start record at that point) -- outSourceId is set to the
+    // new source's ID, or 0 if that start failed. Returns false while
+    // still in progress or if there's no pending/completed start for this
+    // device at all.
+    bool TryTakeStartResult(const std::string& deviceSerial, SourceId& outSourceId);
 
     void StopCapture(const std::string& deviceSerial);
 
@@ -116,11 +129,24 @@ private:
     // only if BOTH ended up successfully in place.
     bool TryAutoDownload(const std::string& toolsDir);
 
+    // The actual (blocking) install/forward/launch sequence -- this is
+    // what StartCaptureAsync runs on a background thread. Returns the new
+    // SourceId, or 0 on failure.
+    SourceId StartCaptureBlocking(Mixer& mixer, const std::string& deviceSerial, int localPort);
+
     void ReaderLoop(Session* session, Mixer* mixer);
+
+    struct PendingStart {
+        std::string deviceSerial;
+        std::thread thread;
+        std::atomic<bool> done{false};
+        SourceId result = 0;
+    };
 
     std::optional<std::string> adbPath_;
     std::optional<std::string> apkPath_;
     std::vector<std::unique_ptr<Session>> sessions_;
+    std::vector<std::unique_ptr<PendingStart>> pendingStarts_;
 };
 
 } // namespace wm

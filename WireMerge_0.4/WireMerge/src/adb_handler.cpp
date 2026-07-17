@@ -360,7 +360,7 @@ std::vector<AdbDeviceInfo> AdbHandler::ListDevices() const {
     return devices;
 }
 
-SourceId AdbHandler::StartCapture(Mixer& mixer, const std::string& deviceSerial, int localPort) {
+SourceId AdbHandler::StartCaptureBlocking(Mixer& mixer, const std::string& deviceSerial, int localPort) {
     if (!IsAvailable()) {
         WM_LOG_ERROR("AdbHandler::StartCapture called but adb/sndcpy.apk not available.");
         return 0;
@@ -426,6 +426,51 @@ SourceId AdbHandler::StartCapture(Mixer& mixer, const std::string& deviceSerial,
     sessions_.push_back(std::move(session));
     WM_LOG_INFO("AdbHandler: started capture for device " + deviceSerial);
     return sourceId;
+}
+
+void AdbHandler::StartCaptureAsync(Mixer& mixer, const std::string& deviceSerial, int localPort) {
+    // If a start is already in progress for this device, don't stack a
+    // second one -- the GUI already disables the button while starting,
+    // but guard here too in case of a rapid double-click race.
+    for (auto& p : pendingStarts_) {
+        if (p->deviceSerial == deviceSerial && !p->done) return;
+    }
+
+    auto pending = std::make_unique<PendingStart>();
+    pending->deviceSerial = deviceSerial;
+    PendingStart* rawPtr = pending.get();
+
+    // mixer and deviceSerial are captured by reference/value into the
+    // thread; mixer's lifetime is the caller's responsibility (same
+    // contract as the rest of AdbHandler -- see Session::readerThread),
+    // and Shutdown()/StopAll() join all pending-start threads before
+    // returning, so none of these can outlive the Mixer they reference.
+    pending->thread = std::thread([this, rawPtr, &mixer, deviceSerial, localPort]() {
+        SourceId result = StartCaptureBlocking(mixer, deviceSerial, localPort);
+        rawPtr->result = result;
+        rawPtr->done = true;
+    });
+
+    pendingStarts_.push_back(std::move(pending));
+}
+
+bool AdbHandler::IsStarting(const std::string& deviceSerial) const {
+    for (auto& p : pendingStarts_) {
+        if (p->deviceSerial == deviceSerial && !p->done) return true;
+    }
+    return false;
+}
+
+bool AdbHandler::TryTakeStartResult(const std::string& deviceSerial, SourceId& outSourceId) {
+    for (auto it = pendingStarts_.begin(); it != pendingStarts_.end(); ++it) {
+        if ((*it)->deviceSerial == deviceSerial && (*it)->done) {
+            outSourceId = (*it)->result;
+            if ((*it)->thread.joinable()) (*it)->thread.join();
+            pendingStarts_.erase(it);
+            return true;
+        }
+    }
+    return false;
 }
 
 void AdbHandler::ReaderLoop(Session* session, Mixer* mixer) {
@@ -604,6 +649,20 @@ void AdbHandler::Shutdown() {
 }
 
 void AdbHandler::StopAll() {
+    // Join in-flight async starts FIRST -- they capture Mixer& by
+    // reference and call StartCaptureBlocking (which calls mixer.AddSource
+    // among other things), so this must complete before returning from
+    // Shutdown()/StopAll(), otherwise the caller could destroy the Mixer
+    // (or this AdbHandler itself) while that thread is still running
+    // against it -- a real use-after-free risk, not just an orderliness
+    // concern. A start already in flight will simply finish normally
+    // (possibly succeeding into a session that then also needs stopping,
+    // handled below since we join before touching sessions_).
+    for (auto& p : pendingStarts_) {
+        if (p->thread.joinable()) p->thread.join();
+    }
+    pendingStarts_.clear();
+
     for (auto& s : sessions_) {
         s->running = false;
         if (s->socket != static_cast<uintptr_t>(~0)) {
