@@ -1,5 +1,6 @@
 #include "gui.h"
 #include "utils.h"
+#include <unordered_map>
 
 #include <d3d11.h>
 #include <windows.h>
@@ -206,10 +207,23 @@ void Gui::RenderDevicesPanel() {
         if (d.index == selectedOutputDevice_) preview = d.name;
     }
 
+    // Only fingerprint devices whose name collides with another device in
+    // the same list -- the common case (one device per name) stays clean;
+    // the fingerprint only appears where it's actually needed to tell two
+    // physically distinct devices apart (e.g. two identical-model USB
+    // mics plugged in at once). See wasapi_identity.h for why this is a
+    // real persistent hardware ID, not just another display string.
+    std::unordered_map<std::string, int> outputNameCounts;
+    for (auto& d : outputs) outputNameCounts[d.name]++;
+
     if (ImGui::BeginCombo("Output", preview.c_str())) {
         for (auto& d : outputs) {
             bool selected = (d.index == selectedOutputDevice_);
             std::string label = d.name + (d.isDefaultOutput ? " (default)" : "");
+            if (outputNameCounts[d.name] > 1) {
+                std::string fp = audio_.GetDeviceFingerprint(d, /*isInput=*/false);
+                if (!fp.empty()) label += " [" + fp + "]";
+            }
             if (ImGui::Selectable(label.c_str(), selected)) {
                 selectedOutputDevice_ = d.index;
             }
@@ -246,10 +260,17 @@ void Gui::RenderDevicesPanel() {
     std::string inPreview = "Choose input...";
     for (auto& d : inputs) if (d.index == selectedInput) inPreview = d.name;
 
+    std::unordered_map<std::string, int> inputNameCounts;
+    for (auto& d : inputs) inputNameCounts[d.name]++;
+
     if (ImGui::BeginCombo("Input", inPreview.c_str())) {
         for (auto& d : inputs) {
             bool selected = (d.index == selectedInput);
             std::string label = d.name + (d.isDefaultInput ? " (default)" : "");
+            if (inputNameCounts[d.name] > 1) {
+                std::string fp = audio_.GetDeviceFingerprint(d, /*isInput=*/true);
+                if (!fp.empty()) label += " [" + fp + "]";
+            }
             if (ImGui::Selectable(label.c_str(), selected)) selectedInput = d.index;
         }
         ImGui::EndCombo();
@@ -358,13 +379,34 @@ void Gui::RenderAndroidPanel() {
     ImGui::Separator();
 
     static std::string selectedSerial;
-    auto devices = adb_.ListDevices();
 
-    if (devices.empty()) {
+    // adb_.ListDevices() spawns an actual adb.exe subprocess (see
+    // AdbHandler::RunAdb) -- calling that unconditionally every render
+    // frame was launching a process 30-60+ times per second on the render
+    // thread, which is what was actually causing the general UI stutter/
+    // jank while dragging windows, not a scheduling-priority issue. Now
+    // cached and only re-queried once per kRescanIntervalMs, or on demand
+    // via the explicit Rescan button below.
+    constexpr double kRescanIntervalMs = 2000.0;
+    static std::vector<AdbDeviceInfo> cachedDevices;
+    static double lastScanTime = -kRescanIntervalMs; // force an initial scan on first frame
+
+    double now = ImGui::GetTime() * 1000.0;
+    if (now - lastScanTime >= kRescanIntervalMs) {
+        cachedDevices = adb_.ListDevices();
+        lastScanTime = now;
+    }
+
+    if (ImGui::SmallButton("Rescan Now")) {
+        cachedDevices = adb_.ListDevices();
+        lastScanTime = now;
+    }
+
+    if (cachedDevices.empty()) {
         ImGui::TextDisabled("No devices detected. Plug in a phone with USB debugging enabled.");
     }
 
-    for (auto& d : devices) {
+    for (auto& d : cachedDevices) {
         bool isSelected = (d.serial == selectedSerial);
         std::string label = d.serial + " [" + d.state + "]";
         if (ImGui::RadioButton(label.c_str(), isSelected)) {

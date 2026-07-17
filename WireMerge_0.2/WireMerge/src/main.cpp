@@ -27,6 +27,23 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     wm::Logger::Instance().SetLogFile("WireMerge.log");
     WM_LOG_INFO(std::string("WireMerge starting up. Version: ") + wm::kWireMergeVersion);
 
+    // Modest process priority boost. Deliberately ABOVE_NORMAL, not
+    // HIGH_PRIORITY_CLASS: HIGH would make WireMerge preempt essentially
+    // everything else on a low-end, few-core machine -- exactly the
+    // hardware this whole project targets -- which directly fights the
+    // "lightweight, don't burden the low-end PC" goal from the original
+    // design. ABOVE_NORMAL gives a real scheduling edge over default-
+    // priority background work without WireMerge starving the very
+    // foreground task (game, work, etc) the user is trying to protect.
+    // The actual hard-realtime protection for the audio callback threads
+    // themselves is MMCSS registration (see audio_handler.cpp/
+    // adb_handler.cpp) -- this process-level bump is a secondary,
+    // complementary measure, not the primary fix.
+    if (!SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)) {
+        WM_LOG_WARN("Could not raise process priority (GetLastError=" +
+                     std::to_string(GetLastError()) + "); continuing at normal priority.");
+    }
+
     auto depStatuses = wm::CheckDependencies();
     if (!wm::ReportDependencyStatus(depStatuses)) {
         WM_LOG_INFO("User chose to exit due to missing dependencies.");

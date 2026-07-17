@@ -277,4 +277,46 @@ void AudioHandler::CloseOutput() {
     }
 }
 
+std::string AudioHandler::GetStableDeviceId(const AudioDeviceInfo& device, bool isInput) const {
+    // Same caching lesson as the ADB device list bug (see gui.cpp's
+    // RenderAndroidPanel fix): WASAPI enumeration involves real COM work
+    // (CoCreateInstance, property store queries per device), and this can
+    // be called from GUI code every frame -- so cache with a refresh
+    // interval instead of re-enumerating on every call.
+    constexpr long long kCacheIntervalMs = 2000;
+    long long now = static_cast<long long>(GetTickCount64());
+    if (now - wasapiCacheTimeMs_ >= kCacheIntervalMs) {
+        wasapiCache_ = WasapiIdentity::EnumerateEndpoints();
+        wasapiCacheTimeMs_ = now;
+    }
+
+    auto match = WasapiIdentity::FindByName(wasapiCache_, device.name, isInput);
+    if (!match) return "";
+
+    // Store as UTF-8 for the public API's plain std::string return type --
+    // wasapi_identity.h keeps the raw ID as std::wstring internally since
+    // that's IMMDevice::GetId()'s native form, but callers of this method
+    // (GUI display code, future config persistence) don't need to deal
+    // with wide strings for what's ultimately just an opaque identity key.
+    int len = WideCharToMultiByte(CP_UTF8, 0, match->endpointId.c_str(), -1,
+                                   nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return "";
+    std::string utf8(len - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, match->endpointId.c_str(), -1, utf8.data(), len, nullptr, nullptr);
+    return utf8;
+}
+
+std::string AudioHandler::GetDeviceFingerprint(const AudioDeviceInfo& device, bool isInput) const {
+    constexpr long long kCacheIntervalMs = 2000;
+    long long now = static_cast<long long>(GetTickCount64());
+    if (now - wasapiCacheTimeMs_ >= kCacheIntervalMs) {
+        wasapiCache_ = WasapiIdentity::EnumerateEndpoints();
+        wasapiCacheTimeMs_ = now;
+    }
+
+    auto match = WasapiIdentity::FindByName(wasapiCache_, device.name, isInput);
+    if (!match) return "";
+    return WasapiIdentity::ShortFingerprint(match->endpointId);
+}
+
 } // namespace wm

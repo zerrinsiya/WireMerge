@@ -80,6 +80,7 @@ add_executable(WireMerge WIN32
     src/audio_handler.cpp
     src/usb_handler.cpp
     src/adb_handler.cpp
+    src/wasapi_identity.cpp
     src/mixer.cpp
     src/gui.cpp
     src/check_dependencies.cpp
@@ -122,7 +123,7 @@ else()
     target_link_libraries(WireMerge PRIVATE libusb-1.0)
 endif()
 
-target_link_libraries(WireMerge PRIVATE d3d11 dxgi d3dcompiler dwmapi ws2_32 urlmon avrt)
+target_link_libraries(WireMerge PRIVATE d3d11 dxgi d3dcompiler dwmapi ws2_32 urlmon avrt ole32)
 
 # Keep the binary small/lightweight in Release builds -- matches the
 # project's core "low-end PC" goal.
