@@ -287,6 +287,7 @@ bool AdbHandler::TryAutoDownload(const std::string& toolsDir) {
 
 int AdbHandler::RunAdb(const std::vector<std::string>& args, std::string& output) const {
     if (!adbPath_) return -1;
+    everInvokedAdb_ = true;
 
     std::ostringstream cmd;
     cmd << "\"" << *adbPath_ << "\"";
@@ -333,6 +334,41 @@ int AdbHandler::RunAdb(const std::vector<std::string>& args, std::string& output
     CloseHandle(pi.hThread);
 
     return static_cast<int>(exitCode);
+}
+
+void AdbHandler::FireAndForgetAdb(const std::vector<std::string>& args) const {
+    if (!adbPath_) return;
+    everInvokedAdb_ = true;
+
+    std::ostringstream cmd;
+    cmd << "\"" << *adbPath_ << "\"";
+    for (auto& a : args) cmd << " " << a;
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    // No STARTF_USESTDHANDLES / pipe here -- we're not reading output,
+    // and not waiting means there's nothing to read into anyway.
+
+    PROCESS_INFORMATION pi{};
+    std::string cmdStr = cmd.str();
+    std::vector<char> cmdBuf(cmdStr.begin(), cmdStr.end());
+    cmdBuf.push_back('\0');
+
+    BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
+                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (!ok) {
+        WM_LOG_WARN("AdbHandler: fire-and-forget launch failed for adb " +
+                     (args.empty() ? "" : args[0]));
+        return;
+    }
+
+    // Deliberately NOT calling WaitForSingleObject -- closing these
+    // handles just stops WireMerge tracking the child process, it does
+    // NOT terminate it. adb.exe keeps running independently and completes
+    // the command on its own, which is exactly what we want here: the
+    // cleanup still happens, WireMerge's own exit just doesn't wait on it.
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
 }
 
 std::vector<AdbDeviceInfo> AdbHandler::ListDevices() const {
@@ -636,10 +672,13 @@ void AdbHandler::StopCapture(const std::string& deviceSerial) {
 
             // Tell the phone to actually stop capturing -- without this,
             // sndcpy keeps running and capturing on the device even after
-            // WireMerge has closed the tunnel on the PC side.
-            std::string out;
-            RunAdb({"-s", deviceSerial, "shell", "am", "force-stop", "com.rom1v.sndcpy"}, out);
-            RunAdb({"-s", deviceSerial, "forward", "--remove", "tcp:" + std::to_string(s->localPort)}, out);
+            // WireMerge has closed the tunnel on the PC side. Fire-and-
+            // forget, same reasoning as StopAll(): this runs directly on
+            // the render thread (called from the Stop button), and
+            // blocking here would freeze the window the same way the
+            // original "Start Capture" bug did.
+            FireAndForgetAdb({"-s", deviceSerial, "shell", "am", "force-stop", "com.rom1v.sndcpy"});
+            FireAndForgetAdb({"-s", deviceSerial, "forward", "--remove", "tcp:" + std::to_string(s->localPort)});
         }
     }
 }
@@ -673,19 +712,25 @@ void AdbHandler::StopAll() {
         }
         if (s->readerThread.joinable()) s->readerThread.join();
 
-        std::string out;
-        RunAdb({"-s", s->deviceSerial, "shell", "am", "force-stop", "com.rom1v.sndcpy"}, out);
-        RunAdb({"-s", s->deviceSerial, "forward", "--remove", "tcp:" + std::to_string(s->localPort)}, out);
+        // Fire-and-forget: these still run to completion (Windows child
+        // processes are independent of their parent), but WireMerge's own
+        // exit no longer blocks waiting on them. Previously blocking here
+        // was the actual cause of the ~1-2s delay + CPU spike on every
+        // close -- same root cause class as the earlier "Start Capture
+        // freezes the window" bug, just at shutdown instead of at a
+        // button click.
+        FireAndForgetAdb({"-s", s->deviceSerial, "shell", "am", "force-stop", "com.rom1v.sndcpy"});
+        FireAndForgetAdb({"-s", s->deviceSerial, "forward", "--remove", "tcp:" + std::to_string(s->localPort)});
     }
     sessions_.clear();
 
-    // Kill the local adb server process WireMerge implicitly started
-    // (the first `adb.exe ...` call auto-spawns a background server if
-    // one isn't already running) -- without this, `adb.exe` lingers as an
-    // orphaned background process after WireMerge itself has exited.
-    if (adbPath_) {
-        std::string out;
-        RunAdb({"kill-server"}, out);
+    // Skip entirely if adb.exe was never actually invoked this session
+    // (e.g. the user never opened the Android panel) -- previously this
+    // ran unconditionally on every single app close just because adb.exe
+    // existed on disk, regardless of whether it was ever used, which was
+    // the single biggest contributor to the reported close delay.
+    if (everInvokedAdb_) {
+        FireAndForgetAdb({"kill-server"});
     }
 
     WSACleanup();

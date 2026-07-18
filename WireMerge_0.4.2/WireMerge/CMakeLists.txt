@@ -51,13 +51,21 @@ include(FetchContent)
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        v1.90.9
-    GIT_SHALLOW    TRUE
-    # Without this, FetchContent re-checks the git remote against GIT_TAG on
-    # every single configure, which under Ninja can trigger an infinite
-    # "Re-running CMake..." loop (each configure regenerates build files,
-    # which Ninja then treats as changed, triggering another configure).
-    # We've already pinned an exact tag, so there's nothing to re-check.
+    # Pinned to the exact commit SHA for the v1.90.9 tag, not the tag name
+    # itself. A full commit SHA is immutable and git/CMake can resolve it
+    # locally without any "is this ref still current" check against the
+    # remote -- a tag name (even one that never moves in practice) can
+    # still trigger FetchContent re-verifying it on every configure
+    # depending on CMake/git version behavior, which is what caused the
+    # "Re-running CMake..." infinite reconfigure loop under Ninja earlier.
+    # This SHA pin is the actual fix; UPDATE_DISCONNECTED (previously used
+    # as a workaround, then removed because it caused a different build
+    # issue) is no longer needed at all with this approach.
+    # To update imgui later: find the new release's commit SHA from its
+    # GitHub release page and replace the line below -- don't just bump
+    # to a version-string tag, or the loop risk returns.
+    GIT_TAG cb16be3a3fc1f9cd146ae24d52b615f8a05fa93d # v1.90.9
+    GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(imgui)
 

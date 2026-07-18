@@ -123,6 +123,18 @@ private:
     // Runs `adb.exe <args>` synchronously, captures stdout, returns exit code.
     int RunAdb(const std::vector<std::string>& args, std::string& output) const;
 
+    // Spawns `adb.exe <args>` WITHOUT waiting for it to finish -- used
+    // during shutdown for cleanup commands (force-stop, forward --remove,
+    // kill-server) that don't need to block WireMerge's own exit. Windows
+    // child processes are fully independent of their parent by default:
+    // not waiting on/closing our handles to it does not kill it, it keeps
+    // running to completion on its own. This is what makes app close
+    // instant instead of waiting out however long those adb round-trips
+    // take (previously ~1-2s, all subprocess-spawn overhead, matching the
+    // same root cause as the earlier "Start Capture freezes the window"
+    // bug -- blocking subprocess work on a thread that shouldn't wait).
+    void FireAndForgetAdb(const std::vector<std::string>& args) const;
+
     // Rare-case fallback: fetches adb.exe (+ its two companion DLLs) and
     // sndcpy.apk into a tools/ folder next to the executable. See
     // Initialize()'s doc comment for when this actually runs. Returns true
@@ -145,6 +157,14 @@ private:
 
     std::optional<std::string> adbPath_;
     std::optional<std::string> apkPath_;
+    // Tracks whether adb.exe has actually been invoked this session (any
+    // RunAdb/FireAndForgetAdb call) -- used at shutdown to skip the
+    // kill-server cleanup call entirely when adb was never touched (e.g.
+    // the user never opened the Android panel), rather than unconditionally
+    // spawning a process on every single app close regardless of whether
+    // it was ever needed. mutable: RunAdb is const, but still needs to
+    // record this.
+    mutable bool everInvokedAdb_ = false;
     std::vector<std::unique_ptr<Session>> sessions_;
     std::vector<std::unique_ptr<PendingStart>> pendingStarts_;
 };

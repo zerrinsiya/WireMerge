@@ -72,7 +72,7 @@ bool Gui::Initialize() {
     // Window title includes the version string (utils.h) so builds are
     // identifiable at a glance -- update kWireMergeVersion there on release.
     HWND hwnd = CreateWindowExA(0, "WireMergeWindowClass", kWireMergeVersion,
-                                 WS_OVERLAPPEDWINDOW, 100, 100, 900, 600,
+                                 WS_OVERLAPPEDWINDOW, 100, 100, 940, 720,
                                  nullptr, nullptr, wc.hInstance, nullptr);
     if (!hwnd) {
         WM_LOG_ERROR("Failed to create Win32 window.");
@@ -136,6 +136,17 @@ bool Gui::Initialize() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
+
+    // Global spacing bump -- ImGui's defaults are quite tight, which is
+    // what made "almost everything" feel cramped. This is a broad,
+    // temporary measure (a real visual design pass is planned separately)
+    // rather than hand-tuning every individual widget's spacing.
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ItemSpacing = ImVec2(10, 10);
+    style.ItemInnerSpacing = ImVec2(8, 6);
+    style.FramePadding = ImVec2(8, 5);
+    style.WindowPadding = ImVec2(14, 14);
+    style.IndentSpacing = 24.0f;
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(Dev(d3dDevice_), Ctx(d3dContext_));
@@ -206,6 +217,11 @@ void Gui::RenderOutputPanel() {
         if (d.index == selectedOutputDevice_) preview = d.name;
     }
 
+    // -1 = stretch to fill the available panel width, rather than ImGui's
+    // cramped default combo width -- the dropdown popup's width follows
+    // the widget's width, so a narrow widget was cutting off longer
+    // device names (e.g. "Speakers (2- USB Audio Device)") in the list.
+    ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("Output", preview.c_str())) {
         for (auto& d : outputs) {
             bool selected = (d.index == selectedOutputDevice_);
@@ -249,6 +265,7 @@ void Gui::RenderInputsPanel_PcSubsection() {
     std::string inPreview = "Choose input...";
     for (auto& d : inputs) if (d.index == selectedInput) inPreview = d.name;
 
+    ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("Input", inPreview.c_str())) {
         for (auto& d : inputs) {
             bool selected = (d.index == selectedInput);
@@ -391,13 +408,15 @@ void Gui::RenderInputsPanel() {
     // feature, not a secondary/bolted-on one, so it belongs alongside
     // regular PC inputs as another input source type, not off in its own
     // disconnected panel.
-    if (ImGui::CollapsingHeader("PC Inputs", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Regulated Inputs to PC", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
         RenderInputsPanel_PcSubsection();
         ImGui::Unindent();
     }
 
-    ImGui::Spacing();
+    ImGui::Dummy(ImVec2(0, 12));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 12));
 
     if (ImGui::CollapsingHeader("Devices (Android)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
