@@ -57,20 +57,25 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
                     "WireMerge - Fatal Error", MB_ICONERROR);
         return 1;
     }
+    WM_LOG_INFO("PortAudio ready.");
 
     wm::UsbHandler usb;
-    if (!usb.Initialize()) {
+    bool usbReady = usb.Initialize();
+    if (!usbReady) {
         // Non-fatal: USB hotplug notifications are a convenience feature.
         // Audio still works via PortAudio device enumeration without it.
         WM_LOG_WARN("libusb failed to initialize; USB connect/disconnect "
                      "notifications will be unavailable, but audio routing "
                      "will still work via manual device selection.");
+    } else {
+        WM_LOG_INFO("libusb ready.");
     }
 
     wm::Mixer mixer;
 
     wm::AdbHandler adb;
-    if (!adb.Initialize()) {
+    bool adbReady = adb.Initialize();
+    if (!adbReady) {
         // Non-fatal, and expected on a fresh install: adb.exe/sndcpy.apk
         // are optional extras the user places in tools/ themselves (see
         // README) rather than something WireMerge bundles or auto-fetches.
@@ -79,7 +84,17 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
         // regardless.
         WM_LOG_WARN("Android (ADB) audio capture unavailable -- see tools/ "
                      "folder requirements in README.md if you want this feature.");
+    } else {
+        WM_LOG_INFO("ADB + sndcpy ready -- Android app-audio capture available.");
     }
+
+    // Consolidated boot summary (3.1) -- one line covering every
+    // subsystem's readiness, so a tester can see at a glance what's
+    // actually available this session without piecing it together from
+    // the individual messages above.
+    WM_LOG_INFO(std::string("Initialization complete. PortAudio: OK, libusb: ") +
+                (usbReady ? "OK" : "unavailable") + ", ADB/sndcpy: " +
+                (adbReady ? "OK" : "unavailable") + ".");
 
     wm::Gui gui(audio, usb, adb, mixer);
     if (!gui.Initialize()) {
@@ -96,12 +111,10 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     gui.Run();
 
     gui.Shutdown();
-    // adb.Shutdown() runs before the "shut down cleanly" log line on
-    // purpose -- it can take a few seconds (force-stopping the phone-side
-    // app, tearing down the forward tunnel, killing the local adb server),
-    // and previously this only happened implicitly via AdbHandler's
-    // destructor during stack unwind, which meant the log claimed a clean
-    // shutdown before that work had actually finished.
+    // adb.Shutdown() is fire-and-forget for its cleanup adb.exe calls (see
+    // adb_handler.cpp's FireAndForgetAdb) -- it no longer blocks waiting
+    // on those, so this ordering is about correctness (stop before audio/
+    // usb teardown) rather than absorbing a multi-second wait.
     adb.Shutdown();
     audio.Shutdown();
     usb.Shutdown();

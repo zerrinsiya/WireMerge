@@ -652,6 +652,19 @@ void AdbHandler::ReaderLoop(Session* session, Mixer* mixer) {
     if (mmcssHandle) AvRevertMmThreadCharacteristics(mmcssHandle);
     closesocket(sock);
     session->socket = static_cast<uintptr_t>(~0); // INVALID_SOCKET -- prevent StopAll from double-closing
+
+    // 3.3: log underrun total BEFORE removing -- same reasoning as the
+    // GUI's manual "Remove" button (see gui.cpp's LogUnderrunSummaryBeforeRemoval),
+    // but this covers the automatic-removal paths that don't go through
+    // that button at all: stream ended on its own, stall timeout, or app
+    // shutdown. Read the counter before RemoveSource destroys the ring
+    // buffer it lives on.
+    uint64_t underrunFrames = mixer->GetUnderrunFrames(session->sourceId);
+    double underrunMs = static_cast<double>(underrunFrames) / kSndcpySampleRate * 1000.0;
+    WM_LOG_INFO("Android source for " + session->deviceSerial +
+                " removed -- total time spent in underrun (audible silence gaps) "
+                "this session: ~" + std::to_string(static_cast<long long>(underrunMs)) + "ms");
+
     mixer->RemoveSource(session->sourceId);
 }
 

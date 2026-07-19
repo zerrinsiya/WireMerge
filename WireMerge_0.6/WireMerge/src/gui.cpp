@@ -22,21 +22,13 @@ static ID3D11RenderTargetView* RTV(void* p) { return static_cast<ID3D11RenderTar
 
 static Gui* g_activeGui = nullptr; // for the WndProc trampoline below
 
-// Explicit ANSI (WndProcA-equivalent) throughout this file -- deliberately
-// not using the generic TCHAR-based macros (_T, CreateWindow, WNDCLASSEX's
-// implicit W/A resolution) to avoid UNICODE-macro-dependent mismatches
-// between narrow and wide Win32 calls.
+// Explicit ANSI throughout this file -- see prior note history for why
+// (avoids UNICODE-macro-dependent mismatches between narrow/wide Win32 calls).
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
 
     switch (msg) {
         case WM_SIZE:
-            // SIZE_MINIMIZED reports a 0x0 client area; skip the resize
-            // entirely rather than trying to build a 0-sized render target
-            // (RenderFrame separately skips rendering while minimized --
-            // see IsIconic check there -- so nothing needs this data until
-            // the window is restored, at which point WM_SIZE fires again
-            // with the real dimensions).
             if (g_activeGui && wParam != SIZE_MINIMIZED) {
                 g_activeGui->HandleResize(LOWORD(lParam), HIWORD(lParam));
             }
@@ -55,11 +47,88 @@ Gui::~Gui() {
     Shutdown();
 }
 
+// ---------------------------------------------------------------------------
+// Theme (v0.6 UI overhaul, item 2.7 + intro note 1)
+//
+// Direction: keep the same TYPE of theme as before (dark base, blue
+// accents) but lean into a deliberately plain/"HTML-looking, unfinished"
+// look rather than a polished/corporate one -- flat fills (no gradients),
+// visible thin borders on everything (like unstyled HTML form controls),
+// and only slight corner rounding (a hint of softness, not pill-shaped
+// buttons or heavily rounded cards, which reads as "corporate SaaS app").
+// ---------------------------------------------------------------------------
+void Gui::ApplyTheme() {
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    // Spacing: previous "everything is cramped" fix, kept -- still a
+    // broad/temporary measure pending further design passes.
+    style.ItemSpacing = ImVec2(10, 10);
+    style.ItemInnerSpacing = ImVec2(8, 6);
+    style.FramePadding = ImVec2(8, 5);
+    style.WindowPadding = ImVec2(14, 14);
+    style.IndentSpacing = 24.0f;
+
+    // Slight rounding only -- explicitly not corporate/pill-shaped.
+    style.WindowRounding = 4.0f;
+    style.ChildRounding = 4.0f;
+    style.FrameRounding = 3.0f;
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 4.0f;
+    style.GrabRounding = 3.0f;
+    style.TabRounding = 3.0f;
+
+    // Visible thin borders everywhere -- this is the main thing that reads
+    // as "plain/unstyled HTML form" rather than a modern flat-borderless
+    // app look.
+    style.WindowBorderSize = 1.0f;
+    style.ChildBorderSize = 1.0f;
+    style.PopupBorderSize = 1.0f;
+    style.FrameBorderSize = 1.0f;
+
+    ImVec4* c = style.Colors;
+
+    // Flat dark background, slightly blue-tinted rather than neutral gray.
+    c[ImGuiCol_WindowBg]  = ImVec4(0.10f, 0.11f, 0.14f, 1.00f);
+    c[ImGuiCol_ChildBg]   = ImVec4(0.12f, 0.13f, 0.17f, 1.00f);
+    c[ImGuiCol_PopupBg]   = ImVec4(0.11f, 0.12f, 0.15f, 1.00f);
+
+    // Borders: visible, plain mid-gray-blue, not high-contrast/glowy.
+    c[ImGuiCol_Border]    = ImVec4(0.30f, 0.33f, 0.40f, 0.60f);
+
+    // Blue accent family for interactive elements -- the "current blue"
+    // continuity note. Flat fills, no gradient, distinct hover/active
+    // steps rather than a smooth animated feel.
+    ImVec4 blue        = ImVec4(0.20f, 0.45f, 0.85f, 1.00f);
+    ImVec4 blueHover   = ImVec4(0.30f, 0.55f, 0.95f, 1.00f);
+    ImVec4 blueActive  = ImVec4(0.15f, 0.35f, 0.70f, 1.00f);
+    ImVec4 blueSubtle  = ImVec4(0.20f, 0.45f, 0.85f, 0.35f);
+
+    c[ImGuiCol_Button]         = blue;
+    c[ImGuiCol_ButtonHovered]  = blueHover;
+    c[ImGuiCol_ButtonActive]   = blueActive;
+    c[ImGuiCol_Header]         = blueSubtle;
+    c[ImGuiCol_HeaderHovered]  = ImVec4(blue.x, blue.y, blue.z, 0.55f);
+    c[ImGuiCol_HeaderActive]   = ImVec4(blue.x, blue.y, blue.z, 0.75f);
+    c[ImGuiCol_FrameBg]        = ImVec4(0.16f, 0.17f, 0.21f, 1.00f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.20f, 0.22f, 0.28f, 1.00f);
+    c[ImGuiCol_FrameBgActive]  = ImVec4(0.22f, 0.25f, 0.32f, 1.00f);
+    c[ImGuiCol_CheckMark]      = blueHover;
+    c[ImGuiCol_SliderGrab]     = blue;
+    c[ImGuiCol_SliderGrabActive] = blueHover;
+    c[ImGuiCol_Separator]      = c[ImGuiCol_Border];
+    c[ImGuiCol_SeparatorHovered] = blue;
+    c[ImGuiCol_SeparatorActive]  = blueHover;
+    c[ImGuiCol_Tab]            = ImVec4(0.14f, 0.15f, 0.19f, 1.00f);
+    c[ImGuiCol_TabHovered]     = blueHover;
+    // ImGuiCol_TabSelected replaces the older ImGuiCol_TabActive name as
+    // of imgui v1.90.9 (this project's pinned version) -- see CMakeLists'
+    // pinned commit; using the old name here would silently compile
+    // against the deprecated redirect rather than the real enumerator.
+    c[ImGuiCol_TabSelected]    = blue;
+}
+
 bool Gui::Initialize() {
-    // Set before CreateWindowExA -- Windows can dispatch WM_SIZE synchronously
-    // as part of window creation itself, and WndProc needs a valid pointer
-    // to forward that to (HandleResize itself no-ops safely if the D3D
-    // device isn't ready yet, so this is safe even if it fires that early).
     g_activeGui = this;
 
     WNDCLASSEXA wc = {
@@ -69,8 +138,6 @@ bool Gui::Initialize() {
     };
     RegisterClassExA(&wc);
 
-    // Window title includes the version string (utils.h) so builds are
-    // identifiable at a glance -- update kWireMergeVersion there on release.
     HWND hwnd = CreateWindowExA(0, "WireMergeWindowClass", kWireMergeVersion,
                                  WS_OVERLAPPEDWINDOW, 100, 100, 940, 720,
                                  nullptr, nullptr, wc.hInstance, nullptr);
@@ -80,7 +147,6 @@ bool Gui::Initialize() {
     }
     hwnd_ = hwnd;
 
-    // --- D3D11 device/swapchain setup ---
     DXGI_SWAP_CHAIN_DESC sd{};
     sd.BufferCount = 2;
     sd.BufferDesc.Width = 0;
@@ -130,32 +196,22 @@ bool Gui::Initialize() {
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
 
-    // --- ImGui setup ---
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    ImGui::StyleColorsDark();
 
-    // Global spacing bump -- ImGui's defaults are quite tight, which is
-    // what made "almost everything" feel cramped. This is a broad,
-    // temporary measure (a real visual design pass is planned separately)
-    // rather than hand-tuning every individual widget's spacing.
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ItemSpacing = ImVec2(10, 10);
-    style.ItemInnerSpacing = ImVec2(8, 6);
-    style.FramePadding = ImVec2(8, 5);
-    style.WindowPadding = ImVec2(14, 14);
-    style.IndentSpacing = 24.0f;
+    ApplyTheme();
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(Dev(d3dDevice_), Ctx(d3dContext_));
 
-    // Wire up USB hotplug -> thread-safe queue drained on the UI thread.
     usb_.StartHotplugMonitor([this](UsbEvent ev, const UsbDeviceInfo& info) {
         std::lock_guard<std::mutex> lock(usbQueueMutex_);
         usbEventQueue_.push_back({ev, info});
     });
+
+    layout_ = TilingLayout::BuildDefaultLayout();
 
     running_ = true;
     return true;
@@ -181,31 +237,77 @@ void Gui::DrainUsbEventQueue() {
     }
 }
 
-void Gui::RenderOutputPanel() {
-    // First-launch-only default layout so panels don't all stack on top of
-    // each other on a fresh run -- ImGuiCond_FirstUseEver means this is
-    // ignored once imgui.ini has a remembered position (e.g. after the
-    // user has dragged panels around), so it doesn't fight manual layout
-    // on subsequent launches.
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(400, 260), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Output Device");
+void Gui::LogUnderrunSummaryBeforeRemoval(SourceId id, const std::string& sourceName) {
+    // Must be called BEFORE Mixer::RemoveSource -- the ring buffer (and
+    // its underrun counter) is destroyed along with the source, so this
+    // is the last point the total is readable. Item 3.3.
+    uint64_t underrunFrames = mixer_.GetUnderrunFrames(id);
+    double underrunMs = static_cast<double>(underrunFrames) / 48000.0 * 1000.0;
+    PushLogLine("Removed '" + sourceName + "' -- total time spent in underrun (audible "
+                "silence gaps) this session: ~" + std::to_string(static_cast<long long>(underrunMs)) + "ms");
+}
 
-    // Styled red so it reads as a distinct/deliberate action, not just
-    // another control -- clicking this runs the exact same shutdown
-    // sequence as closing the window (see RequestExit()'s doc comment),
-    // it's not a separate/lesser cleanup path.
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.15f, 0.15f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.20f, 0.20f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.85f, 0.10f, 0.10f, 1.0f));
-    if (ImGui::Button("Exit WireMerge")) {
+// ---------------------------------------------------------------------------
+// Toolbar (item 2.6): Exit relocated OUT of the tiled panes into a fixed
+// top strip alongside branding, so it's clearly app-level chrome rather
+// than looking like it belongs to any one pane's content.
+// ---------------------------------------------------------------------------
+void Gui::RenderToolbar(float& outContentY) {
+    ImGuiIO& io = ImGui::GetIO();
+    float toolbarHeight = 40.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, toolbarHeight));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::Begin("##toolbar", nullptr,
+                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(kWireMergeVersion);
+
+    // Right-aligned Exit -- toolbar-appropriate size (not the previous
+    // full-width alarming red button), still a distinct color so it
+    // reads as a deliberate/different action from ordinary controls, but
+    // scaled and placed like normal toolbar chrome instead of shouting.
+    const char* exitLabel = "Exit";
+    float exitWidth = ImGui::CalcTextSize(exitLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f;
+    ImGui::SameLine(io.DisplaySize.x - exitWidth - 14.0f);
+
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.18f, 0.18f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.68f, 0.22f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.78f, 0.14f, 0.14f, 1.0f));
+    if (ImGui::Button(exitLabel)) {
         RequestExit();
     }
     ImGui::PopStyleColor(3);
-    ImGui::Separator();
 
-    static float masterVolume = 1.0f;
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+
+    outContentY = toolbarHeight;
+}
+
+std::string Gui::PaneDisplayName(const std::string& paneId) const {
+    if (paneId == "output") return "Output Device";
+    if (paneId == "inputs") return "Inputs";
+    if (paneId == "sources") return "Active Sources";
+    if (paneId == "log") return "Log";
+    return paneId;
+}
+
+void Gui::RenderPane(const std::string& paneId, const PaneRenderContext& ctx) {
+    if (paneId == "output") RenderOutputContent(ctx);
+    else if (paneId == "inputs") RenderInputsContent(ctx);
+    else if (paneId == "sources") RenderSourcesContent(ctx);
+    else if (paneId == "log") RenderLogContent(ctx);
+}
+
+void Gui::RenderOutputContent(const PaneRenderContext& /*ctx*/) {
     ImGui::SetNextItemWidth(200.0f);
+    static float masterVolume = 1.0f;
     if (ImGui::SliderFloat("Master Volume", &masterVolume, 0.0f, 1.5f, "%.2f")) {
         mixer_.SetMasterVolume(masterVolume);
     }
@@ -217,12 +319,16 @@ void Gui::RenderOutputPanel() {
         if (d.index == selectedOutputDevice_) preview = d.name;
     }
 
-    // -1 = stretch to fill the available panel width, rather than ImGui's
-    // cramped default combo width -- the dropdown popup's width follows
-    // the widget's width, so a narrow widget was cutting off longer
-    // device names (e.g. "Speakers (2- USB Audio Device)") in the list.
+    // Item 2.3/2.4 fix: previously the combo used its default (non-hidden)
+    // inline label drawn to the right of the widget, WHILE ALSO being
+    // stretched to -1 (fill available width) -- leaving zero room for
+    // that label, which is what clipped a letter off "Output"/"Input"
+    // right next to the dropdown. Fix: hide the inline label ("##Output")
+    // and draw it as its own line above instead, which also can't break
+    // regardless of how narrow the pane gets resized to.
+    ImGui::TextUnformatted("Output");
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("Output", preview.c_str())) {
+    if (ImGui::BeginCombo("##Output", preview.c_str())) {
         for (auto& d : outputs) {
             bool selected = (d.index == selectedOutputDevice_);
             std::string label = d.name + (d.isDefaultOutput ? " (default)" : "");
@@ -252,21 +358,19 @@ void Gui::RenderOutputPanel() {
         PushLogLine("Output stopped.");
     }
     ImGui::EndDisabled();
-
-    ImGui::End();
 }
 
-void Gui::RenderInputsPanel_PcSubsection() {
-    ImGui::TextWrapped("USB microphones, DACs, and audio interfaces -- "
-                        "anything Windows already shows as a recording device.");
-
+void Gui::RenderInputsContent_PcSubsection() {
     static int selectedInput = -1;
     auto inputs = audio_.ListInputDevices();
     std::string inPreview = "Choose input...";
     for (auto& d : inputs) if (d.index == selectedInput) inPreview = d.name;
 
+    // Same label-cutoff fix as the Output combo -- see that function's
+    // comment for the full explanation.
+    ImGui::TextUnformatted("Input");
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("Input", inPreview.c_str())) {
+    if (ImGui::BeginCombo("##Input", inPreview.c_str())) {
         for (auto& d : inputs) {
             bool selected = (d.index == selectedInput);
             std::string label = d.name + (d.isDefaultInput ? " (default)" : "");
@@ -278,51 +382,42 @@ void Gui::RenderInputsPanel_PcSubsection() {
     ImGui::BeginDisabled(selectedInput < 0);
     if (ImGui::Button("Add Source")) {
         SourceId id = audio_.OpenInputSource(mixer_, selectedInput);
-        if (id != 0) PushLogLine("Added input source.");
-        else PushLogLine("Failed to add input source -- check log file.");
+        if (id != 0) {
+            std::string name = "input source";
+            for (auto& d : inputs) if (d.index == selectedInput) name = d.name;
+            PushLogLine("Regulated input added: " + name + ".");
+        } else {
+            PushLogLine("Failed to add regulated input -- check log file.");
+        }
     }
     ImGui::EndDisabled();
 
     if (ImGui::Button("Rescan Devices")) {
-        PushLogLine("Rescanned devices.");
-        // ListInputDevices()/ListOutputDevices() re-query PortAudio live
-        // and are cheap in-memory lookups (unlike the ADB device list --
-        // see the Android subsection below), so nothing else needs to
-        // happen here besides the log entry.
+        PushLogLine("Regulated input devices rescanned.");
     }
 }
 
-void Gui::RenderInputsPanel_AndroidSubsection() {
+void Gui::RenderInputsContent_AndroidSubsection() {
     if (!adb_.IsAvailable()) {
-        ImGui::TextWrapped(
-            "Not set up: adb.exe and sndcpy.apk weren't found in the 'tools' "
-            "folder next to WireMerge.exe. WireMerge already tried a one-time "
-            "automatic download on startup (check the Log panel for whether "
-            "that succeeded or failed) -- if it failed, likely due to no "
-            "internet access, see README.md for manual download links, or "
-            "just restart WireMerge once you're back online.");
+        // Kept short and factual -- matches the trimmed style of the PC
+        // subsection rather than the previous multi-sentence explainer.
+        ImGui::TextWrapped("Not set up: adb.exe / sndcpy.apk missing from "
+                            "'tools' (see Log / README).");
         return;
     }
 
-    ImGui::TextWrapped(
-        "Captures an app's audio (e.g. Spotify) from the phone itself, over "
-        "the same USB cable used for charging/data. Requires USB debugging "
-        "enabled on the phone (one-time authorization prompt), and each "
-        "time capture starts, an on-device prompt to confirm screen/audio "
-        "capture (normal Android behavior, not a bug). Not all apps allow "
-        "this -- most do, some DRM-guarded streaming apps don't.");
-    ImGui::Separator();
+    // Item 2.5: cut down to length/style matching the PC subsection's
+    // single short line, instead of the previous multi-sentence explainer
+    // -- the fuller explanation now lives in the README rather than the
+    // GUI itself.
+    ImGui::TextWrapped("Captures phone app audio (e.g. Spotify) over USB. "
+                        "Requires a one-time on-device permission per capture.");
 
     static std::string selectedSerial;
 
-    // adb_.ListDevices() spawns an actual adb.exe subprocess -- calling
-    // that unconditionally every render frame was launching a process
-    // 30-60+ times per second on the render thread, which was the actual
-    // cause of general UI stutter/dragging jank (not a scheduling-priority
-    // issue). Cached to a 2s interval, plus an explicit Rescan button.
     constexpr double kRescanIntervalMs = 2000.0;
     static std::vector<AdbDeviceInfo> cachedDevices;
-    static double lastScanTime = -kRescanIntervalMs; // force an initial scan on first frame
+    static double lastScanTime = -kRescanIntervalMs;
 
     double now = ImGui::GetTime() * 1000.0;
     if (now - lastScanTime >= kRescanIntervalMs) {
@@ -336,7 +431,7 @@ void Gui::RenderInputsPanel_AndroidSubsection() {
     }
 
     if (cachedDevices.empty()) {
-        ImGui::TextDisabled("No devices detected. Plug in a phone with USB debugging enabled.");
+        ImGui::TextDisabled("No devices detected.");
     }
 
     for (auto& d : cachedDevices) {
@@ -347,10 +442,6 @@ void Gui::RenderInputsPanel_AndroidSubsection() {
         }
     }
 
-    // Poll for a just-finished async start every frame, regardless of
-    // whether this device is currently selected -- a start kicked off
-    // earlier should still get its result consumed and logged even if the
-    // user has since clicked a different device's radio button.
     for (auto& d : cachedDevices) {
         SourceId result;
         if (adb_.TryTakeStartResult(d.serial, result)) {
@@ -368,18 +459,8 @@ void Gui::RenderInputsPanel_AndroidSubsection() {
 
     ImGui::BeginDisabled(!canStart);
     if (ImGui::Button("Start Android Capture")) {
-        // Async: the install/forward/launch sequence involves several
-        // adb.exe round-trips and can take up to ~10s (an APK install
-        // alone can be several seconds) -- running that synchronously on
-        // this button's call stack previously froze the whole window
-        // (Windows marks a window "not responding" once its message loop
-        // stops pumping, which is exactly what a blocked render thread
-        // does). Now runs on a background thread; see the "starting..."
-        // status text below for the in-progress state.
         adb_.StartCaptureAsync(mixer_, selectedSerial);
-        PushLogLine("Starting Android capture for " + selectedSerial +
-                    "... this can take up to ~10s (installing/launching on "
-                    "the phone). The window will stay responsive.");
+        PushLogLine("Starting Android capture for " + selectedSerial + "...");
     }
     ImGui::EndDisabled();
 
@@ -393,24 +474,14 @@ void Gui::RenderInputsPanel_AndroidSubsection() {
 
     if (starting) {
         ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f),
-                            "Starting capture on %s... check the phone screen "
-                            "for a permission prompt.", selectedSerial.c_str());
+                            "Starting on %s -- check phone for prompt.", selectedSerial.c_str());
     }
 }
 
-void Gui::RenderInputsPanel() {
-    ImGui::SetNextWindowPos(ImVec2(440, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(440, 380), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Inputs");
-
-    // Two clearly separated subsections in one window rather than two
-    // separate top-level windows -- Android capture is the app's main
-    // feature, not a secondary/bolted-on one, so it belongs alongside
-    // regular PC inputs as another input source type, not off in its own
-    // disconnected panel.
+void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
     if (ImGui::CollapsingHeader("Regulated Inputs to PC", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
-        RenderInputsPanel_PcSubsection();
+        RenderInputsContent_PcSubsection();
         ImGui::Unindent();
     }
 
@@ -420,18 +491,12 @@ void Gui::RenderInputsPanel() {
 
     if (ImGui::CollapsingHeader("Devices (Android)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
-        RenderInputsPanel_AndroidSubsection();
+        RenderInputsContent_AndroidSubsection();
         ImGui::Unindent();
     }
-
-    ImGui::End();
 }
 
-void Gui::RenderSourcesPanel() {
-    ImGui::SetNextWindowPos(ImVec2(20, 300), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(400, 320), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Active Sources");
-
+void Gui::RenderSourcesContent(const PaneRenderContext& /*ctx*/) {
     auto sources = mixer_.ListSources();
     if (sources.empty()) {
         ImGui::TextDisabled("No sources added yet.");
@@ -449,24 +514,21 @@ void Gui::RenderSourcesPanel() {
 
         float volume = s.volume;
         ImGui::SetNextItemWidth(180.0f);
-        // Kept as an optional trim only -- the external device (phone/TV)
-        // is expected to be the primary volume control, per the project's
-        // core design goal. 1.0 = unity/pass-through.
         if (ImGui::SliderFloat("Trim", &volume, 0.0f, 2.0f, "%.2f")) {
             mixer_.SetVolume(s.id, volume);
         }
 
         ImGui::SameLine();
         if (ImGui::SmallButton("Remove")) {
+            // 3.3: log the underrun summary BEFORE removing -- the ring
+            // buffer (and its counter) goes away with the source.
+            LogUnderrunSummaryBeforeRemoval(s.id, s.name);
             audio_.CloseInputSource(s.id);
             mixer_.RemoveSource(s.id);
         }
 
-        // Live underrun indicator -- rising quickly means this source's
-        // buffer is running dry (audible gaps/stutter). Color-coded so
-        // it's visible at a glance without reading exact numbers.
         uint64_t underrunFrames = mixer_.GetUnderrunFrames(s.id);
-        double underrunMs = static_cast<double>(underrunFrames) / 48000.0 * 1000.0; // approximation; exact rate varies per source
+        double underrunMs = static_cast<double>(underrunFrames) / 48000.0 * 1000.0;
         ImVec4 color = underrunMs < 50.0 ? ImVec4(0.5f, 0.5f, 0.5f, 1.0f)
                       : underrunMs < 500.0 ? ImVec4(0.9f, 0.7f, 0.2f, 1.0f)
                       : ImVec4(0.9f, 0.3f, 0.3f, 1.0f);
@@ -475,34 +537,19 @@ void Gui::RenderSourcesPanel() {
         ImGui::Separator();
         ImGui::PopID();
     }
-
-    ImGui::End();
 }
 
-void Gui::RenderLogPanel() {
-    ImGui::SetNextWindowPos(ImVec2(440, 420), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(440, 200), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Log");
-    // TextUnformatted never wraps regardless of window width -- that's
-    // why log lines were clipping off-screen instead of wrapping.
-    // TextWrapped wraps to the current content region width automatically.
+void Gui::RenderLogContent(const PaneRenderContext& /*ctx*/) {
     for (auto& line : logLines_) {
         ImGui::TextWrapped("%s", line.c_str());
     }
     if (!logLines_.empty()) ImGui::SetScrollHereY(1.0f);
-    ImGui::End();
 }
 
 void Gui::HandleResize(unsigned int width, unsigned int height) {
-    // No-op if called before D3D is set up (e.g. an early WM_SIZE during
-    // CreateWindowExA, before the swapchain exists yet) or with a
-    // degenerate size.
     if (!d3dDevice_ || !d3dContext_ || !swapChain_) return;
     if (width == 0 || height == 0) return;
 
-    // Must release the old render target view before ResizeBuffers --
-    // DXGI refuses to resize while anything still references the old
-    // back buffer.
     if (renderTargetView_) {
         RTV(renderTargetView_)->Release();
         renderTargetView_ = nullptr;
@@ -524,11 +571,6 @@ void Gui::HandleResize(unsigned int width, unsigned int height) {
 }
 
 void Gui::RenderFrame() {
-    // Skip rendering entirely while minimized: the client area is 0x0, the
-    // swapchain/render target aren't meaningfully sized, and calling
-    // Present() in this state is what caused visible corruption on
-    // minimize/restore before this guard existed. A short sleep avoids
-    // busy-spinning Run()'s loop the whole time the window is minimized.
     if (hwnd_ && IsIconic(static_cast<HWND>(hwnd_))) {
         Sleep(50);
         return;
@@ -540,10 +582,39 @@ void Gui::RenderFrame() {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    RenderOutputPanel();
-    RenderInputsPanel();
-    RenderSourcesPanel();
-    RenderLogPanel();
+    ImGuiIO& io = ImGui::GetIO();
+
+    float contentY = 0.0f;
+    RenderToolbar(contentY);
+
+    // The tiling layout fills everything below the toolbar, and is
+    // recomputed from the CURRENT window size every frame -- this is what
+    // makes panes automatically resize/adapt when the main window itself
+    // is resized (item 2.1), with no special-casing needed: there's no
+    // stored pixel geometry for panes, only ratios within the tree.
+    ImGui::SetNextWindowPos(ImVec2(0, contentY));
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y - contentY));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##layout_root", nullptr,
+                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                  ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+                  ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    if (layout_) {
+        TilingLayout::Render(*layout_, 0, contentY, io.DisplaySize.x, io.DisplaySize.y - contentY,
+                              [this](const std::string& paneId, const PaneRenderContext& ctx) {
+                                  RenderPane(paneId, ctx);
+                              },
+                              [this](const std::string& paneId) {
+                                  return PaneDisplayName(paneId);
+                              });
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(3);
 
     ImGui::Render();
 
@@ -552,7 +623,7 @@ void Gui::RenderFrame() {
     Ctx(d3dContext_)->ClearRenderTargetView(RTV(renderTargetView_), clearColor);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-    Swap(swapChain_)->Present(1, 0); // vsync on -- keeps CPU usage low, matches "lightweight" goal
+    Swap(swapChain_)->Present(1, 0);
 }
 
 void Gui::Run() {

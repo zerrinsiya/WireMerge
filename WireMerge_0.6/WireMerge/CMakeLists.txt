@@ -88,6 +88,7 @@ add_executable(WireMerge WIN32
     src/usb_handler.cpp
     src/adb_handler.cpp
     src/mixer.cpp
+    src/layout.cpp
     src/gui.cpp
     src/check_dependencies.cpp
     src/utils.cpp
