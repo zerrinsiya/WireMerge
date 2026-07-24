@@ -29,12 +29,12 @@
 //   - Between two children of a split, a thin draggable strip lets the
 //     user drag the divider, adjusting that split's ratio live (2.2,
 //     confirmed VS-Code-style: growing one pane shrinks its sibling).
-//   - Each leaf renders a small header bar (drag source AND drop target)
-//     above its content; dragging one leaf's header onto another leaf
-//     swaps which pane ID occupies which leaf (2.2's second interaction).
-//     Content itself renders inside a plain ImGui::BeginChild with no
-//     border-drag/resize-grip behavior of its own -- all resizing goes
-//     through the splitter strips, not the child window.
+//   - Each leaf renders a small header bar above its content, labeling
+//     the pane. Content itself renders inside a plain ImGui::BeginChild
+//     with no border-drag/resize-grip behavior of its own -- all resizing
+//     goes through the splitter strips, not the child window. (Pane
+//     swap-by-drag was considered and explicitly dropped in the v0.6 UI
+//     spec -- header bars are labels only now, not drag sources/targets.)
 // ---------------------------------------------------------------------------
 
 namespace wm {
@@ -61,6 +61,19 @@ struct PaneRenderContext {
     float x, y, width, height; // content rect, already excludes this pane's header bar
 };
 
+// Draws a subtle bordered/backed "card" frame at (x,y,width,height): a
+// background fill, a thin border, and a label at the top -- with a real
+// inset margin between that outer border and where content actually
+// starts (this is the "subtle window" treatment requested repeatedly:
+// every pane, and now also each Inputs subsection, should look like its
+// own small bordered card with breathing room inside it, not content
+// sitting flush against a border). Returns the inner content rect; the
+// caller is responsible for BeginChild/EndChild (with NO border of its
+// own -- this function already drew the one border, a second one would
+// produce the "box inside a box" look reported earlier).
+PaneRenderContext DrawSubtlePanelFrame(const std::string& label, float x, float y,
+                                        float width, float height, float margin);
+
 class TilingLayout {
 public:
     // Builds the fixed initial 2x2 arrangement: (Output | Inputs) on top,
@@ -70,6 +83,14 @@ public:
     // restarts -- see gui.cpp's TODO note on config persistence).
     static LayoutNodePtr BuildDefaultLayout();
 
+    // Finds the split node whose first or second child is the leaf with
+    // the given paneId, or nullptr if not found / paneId is the root.
+    // Used by item-5-style live corrections that need to nudge a
+    // specific split's ratio (e.g. growing the Sources/Inputs split so
+    // Active Sources doesn't need its own scrollbar) without the caller
+    // needing to know the tree shape.
+    static LayoutNode* FindPaneParent(LayoutNode& root, const std::string& paneId);
+
     // Call once per frame with the available content region (usually the
     // full window client area). Walks the tree, draws splitter strips,
     // and for each leaf calls renderFn(paneId, rect) so the caller can
@@ -78,15 +99,13 @@ public:
     // which lives in gui.cpp as before.
     //
     // displayNameFn maps a pane ID to the human-readable header text
-    // shown in that leaf's drag handle (e.g. "output" -> "Output Device").
+    // shown in that leaf's header bar (e.g. "output" -> "Output Device").
     static void Render(LayoutNode& root, float x, float y, float width, float height,
                         const std::function<void(const std::string& paneId, const PaneRenderContext&)>& renderFn,
                         const std::function<std::string(const std::string& paneId)>& displayNameFn);
 
 private:
-    // Returns true if a swap was performed this frame (root may have been
-    // mutated -- specifically, two leaves' paneId fields swapped).
-    static bool RenderNode(LayoutNode& node, float x, float y, float width, float height,
+    static void RenderNode(LayoutNode& node, float x, float y, float width, float height,
                             const std::function<void(const std::string&, const PaneRenderContext&)>& renderFn,
                             const std::function<std::string(const std::string&)>& displayNameFn);
 };

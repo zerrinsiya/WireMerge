@@ -116,4 +116,25 @@ void Config::Set(const std::string& key, int value) { values_[key] = std::to_str
 void Config::Set(const std::string& key, float value) { values_[key] = std::to_string(value); }
 void Config::Set(const std::string& key, bool value) { values_[key] = value ? "1" : "0"; }
 
+// ---------------------------------------------------------------------------
+// UiLog
+// ---------------------------------------------------------------------------
+
+UiLog& UiLog::Instance() {
+    static UiLog instance;
+    return instance;
+}
+
+void UiLog::Push(const std::string& line) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    lines_.push_back(line);
+}
+
+std::vector<std::string> UiLog::DrainAll() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> result;
+    result.swap(lines_);
+    return result;
+}
+
 } // namespace wm

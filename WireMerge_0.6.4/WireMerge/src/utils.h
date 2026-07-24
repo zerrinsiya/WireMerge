@@ -3,6 +3,7 @@
 #include <mutex>
 #include <fstream>
 #include <unordered_map>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // utils.h
@@ -16,7 +17,7 @@ namespace wm {
 // Single source of truth for the version string. Update this one line on
 // release; everything else (window title, log startup line, About text)
 // reads from here rather than hardcoding the version separately.
-inline constexpr const char* kWireMergeVersion = "WireMerge_0.6";
+inline constexpr const char* kWireMergeVersion = "WireMerge_0.6.4";
 
 enum class LogLevel { Debug, Info, Warn, Error };
 
@@ -46,6 +47,36 @@ private:
 #define WM_LOG_INFO(msg)  ::wm::Logger::Instance().Info(msg)
 #define WM_LOG_WARN(msg)  ::wm::Logger::Instance().Warn(msg)
 #define WM_LOG_ERROR(msg) ::wm::Logger::Instance().Error(msg)
+
+// A small, CURATED buffer of user-facing messages, separate from Logger's
+// full internal log (which captures everything, including verbose detail
+// not meant for end users). This exists specifically to solve one
+// ordering problem: main.cpp's boot sequence (PortAudio/libusb/ADB
+// readiness, the auto-download fallback, etc) runs BEFORE any Gui
+// instance exists, so those messages have nowhere to go if Gui::PushLogLine
+// were the only sink -- there's no Gui object yet to call it on. Boot
+// code explicitly pushes the specific lines worth user visibility here
+// (not a mirror of every WM_LOG_INFO call -- that's the "curated"/"not
+// all of it, just some" part); Gui::Initialize() drains this once at
+// startup to seed its own Log panel, then continues operating normally
+// via PushLogLine for everything that happens after the GUI exists.
+class UiLog {
+public:
+    static UiLog& Instance();
+
+    void Push(const std::string& line);
+
+    // Returns everything pushed so far and clears the internal buffer --
+    // meant to be called exactly once, by Gui::Initialize(), to seed the
+    // UI's own log deque. Calling it again after that returns nothing
+    // useful (which is fine, since ongoing runtime messages after Gui
+    // exists go through Gui::PushLogLine directly instead).
+    std::vector<std::string> DrainAll();
+
+private:
+    std::mutex mutex_;
+    std::vector<std::string> lines_;
+};
 
 // Very small INI-style config store: "key=value" per line, '#' comments.
 // Kept intentionally simple -- no nested sections, no external deps.

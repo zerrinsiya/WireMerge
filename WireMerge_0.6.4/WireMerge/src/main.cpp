@@ -58,6 +58,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
         return 1;
     }
     WM_LOG_INFO("PortAudio ready.");
+    wm::UiLog::Instance().Push("Audio engine ready.");
 
     wm::UsbHandler usb;
     bool usbReady = usb.Initialize();
@@ -84,17 +85,25 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
         // regardless.
         WM_LOG_WARN("Android (ADB) audio capture unavailable -- see tools/ "
                      "folder requirements in README.md if you want this feature.");
+        wm::UiLog::Instance().Push("Android capture unavailable this session "
+                                    "(adb/sndcpy not found in tools/) -- see Log for detail.");
     } else {
         WM_LOG_INFO("ADB + sndcpy ready -- Android app-audio capture available.");
+        wm::UiLog::Instance().Push("Android capture ready (ADB + sndcpy found).");
     }
 
     // Consolidated boot summary (3.1) -- one line covering every
-    // subsystem's readiness, so a tester can see at a glance what's
-    // actually available this session without piecing it together from
-    // the individual messages above.
-    WM_LOG_INFO(std::string("Initialization complete. PortAudio: OK, libusb: ") +
-                (usbReady ? "OK" : "unavailable") + ", ADB/sndcpy: " +
-                (adbReady ? "OK" : "unavailable") + ".");
+    // subsystem's readiness. Pushed to BOTH the full internal log AND the
+    // curated UiLog buffer, since this specific line is exactly the kind
+    // of transparency-at-a-glance summary a user benefits from seeing in
+    // the app itself, not just the log file (see UiLog's doc comment for
+    // why a separate buffer is needed at all: Gui doesn't exist yet at
+    // this point in boot, so Gui::PushLogLine can't be called directly).
+    std::string bootSummary = std::string("Startup complete -- PortAudio: OK, USB hotplug: ") +
+                (usbReady ? "OK" : "unavailable") + ", Android capture: " +
+                (adbReady ? "OK" : "unavailable") + ".";
+    WM_LOG_INFO(bootSummary);
+    wm::UiLog::Instance().Push(bootSummary);
 
     wm::Gui gui(audio, usb, adb, mixer);
     if (!gui.Initialize()) {

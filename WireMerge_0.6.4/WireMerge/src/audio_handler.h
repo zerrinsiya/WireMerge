@@ -44,6 +44,12 @@ public:
     std::vector<AudioDeviceInfo> ListInputDevices() const;
     std::vector<AudioDeviceInfo> ListOutputDevices() const;
 
+    // Forces PortAudio to actually re-enumerate hardware (WASAPI) instead
+    // of returning the same snapshot it took at Initialize() time -- see
+    // .cpp for why "Rescan Devices" previously did nothing until a full
+    // app restart.
+    bool RescanDevices();
+
     // Opens an input stream on `deviceIndex` and registers a new source in
     // `mixer` for it. Returns the new SourceId, or 0 on failure.
     SourceId OpenInputSource(Mixer& mixer, int deviceIndex,

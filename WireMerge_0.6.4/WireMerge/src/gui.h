@@ -39,8 +39,7 @@ private:
 
     void RenderOutputContent(const PaneRenderContext& ctx);
     void RenderInputsContent(const PaneRenderContext& ctx);
-    void RenderInputsContent_PcSubsection();
-    void RenderInputsContent_AndroidSubsection();
+    void RenderDevicesContent(const PaneRenderContext& ctx);
     void RenderSourcesContent(const PaneRenderContext& ctx);
     void RenderLogContent(const PaneRenderContext& ctx);
 
@@ -69,11 +68,21 @@ private:
     bool outputOpen_ = false;
 
     LayoutNodePtr layout_;
+    // item 5: the Sources/Inputs split node, cached once so
+    // RenderSourcesContent can nudge its ratio without re-searching the
+    // tree every frame. Grows the ratio in small steps only until Active
+    // Sources stops needing its own scrollbar, then stops permanently
+    // (sourcesRatioSettled_) so it never fights a later manual splitter
+    // drag.
+    LayoutNode* sourcesSplitNode_ = nullptr;
+    bool sourcesRatioSettled_ = false;
 
     std::mutex usbQueueMutex_;
     std::deque<std::pair<UsbEvent, UsbDeviceInfo>> usbEventQueue_;
 
     std::deque<std::string> logLines_;
+    size_t lastSeenLogLineCount_ = 0; // for RenderLogContent's auto-scroll-on-new-lines fix
+    bool wasAtBottomLastFrame_ = true; // whether user was scrolled to bottom; gates auto-follow
 };
 
 } // namespace wm
