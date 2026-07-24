@@ -68,7 +68,31 @@ public:
     // and fall back to the existing manual-instructions messaging.
     bool Initialize(bool autoDownloadIfMissing = true);
 
-    bool IsAvailable() const { return adbPath_.has_value() && apkPath_.has_value(); }
+    // Item 1: runs Initialize() on a background thread instead of
+    // blocking the caller. This is what the "startup takes 5 seconds"
+    // report traced back to -- Initialize() was called synchronously
+    // before the GUI window even existed, and on a fresh/stripped-down
+    // install it does a real network fetch (adb.exe + sndcpy.apk) that
+    // can easily take several seconds. The window now appears
+    // immediately; Android capture becomes available a few seconds
+    // later once this finishes, same as how StartCaptureAsync already
+    // handles the individual per-device capture-start sequence.
+    void InitializeAsync(bool autoDownloadIfMissing = true);
+
+    // Gates on the async init having actually finished (asyncInitDone_,
+    // checked with acquire ordering) -- during the window before it
+    // completes, this correctly reports "unavailable" rather than racing
+    // to read adbPath_/apkPath_ while Initialize() might still be
+    // writing them from the background thread. The acquire/release pair
+    // on asyncInitDone_ is what makes that safe without a full mutex.
+    bool IsAvailable() const {
+        return asyncInitDone_.load(std::memory_order_acquire) &&
+               adbPath_.has_value() && apkPath_.has_value();
+    }
+
+    // Distinguishes "still checking" from "checked, and it's
+    // unavailable" -- IsAvailable() alone can't tell those apart.
+    bool IsAsyncInitDone() const { return asyncInitDone_.load(std::memory_order_acquire); }
 
     std::vector<AdbDeviceInfo> ListDevices() const;
 
@@ -157,6 +181,12 @@ private:
 
     std::optional<std::string> adbPath_;
     std::optional<std::string> apkPath_;
+    // Item 1: background thread running Initialize(), and the flag that
+    // gates IsAvailable() until it's actually finished writing
+    // adbPath_/apkPath_ above. Joined in StopAll()/Shutdown() before any
+    // other teardown, same ordering reasoning as pendingStarts_ below.
+    std::thread asyncInitThread_;
+    std::atomic<bool> asyncInitDone_{false};
     // Tracks whether adb.exe has actually been invoked this session (any
     // RunAdb/FireAndForgetAdb call) -- used at shutdown to skip the
     // kill-server cleanup call entirely when adb was never touched (e.g.

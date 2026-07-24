@@ -4,6 +4,7 @@
 
 #include <d3d11.h>
 #include <windows.h>
+#include <psapi.h>
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -270,8 +271,23 @@ bool Gui::Initialize() {
     };
     RegisterClassExA(&wc);
 
+    // Item 5: (100,100) put the window at a fixed screen-space offset
+    // regardless of monitor resolution -- on smaller/scaled displays that
+    // pushes 1280x720 partially off-screen. Center on the primary
+    // monitor's WORK AREA (SM_C*SCREEN would include the taskbar strip;
+    // SPI_GETWORKAREA excludes it, so centering doesn't look shifted
+    // toward the taskbar).
+    constexpr int kWindowWidth = 1280;
+    constexpr int kWindowHeight = 720;
+    RECT workArea{};
+    SystemParametersInfoA(SPI_GETWORKAREA, 0, &workArea, 0);
+    int workWidth = workArea.right - workArea.left;
+    int workHeight = workArea.bottom - workArea.top;
+    int windowX = workArea.left + std::max(0, (workWidth - kWindowWidth) / 2);
+    int windowY = workArea.top + std::max(0, (workHeight - kWindowHeight) / 2);
+
     HWND hwnd = CreateWindowExA(0, "WireMergeWindowClass", kWireMergeVersion,
-                                 WS_OVERLAPPEDWINDOW, 100, 100, 1280, 720,
+                                 WS_OVERLAPPEDWINDOW, windowX, windowY, kWindowWidth, kWindowHeight,
                                  nullptr, nullptr, wc.hInstance, nullptr);
     if (!hwnd) {
         WM_LOG_ERROR("Failed to create Win32 window.");
@@ -504,7 +520,19 @@ void Gui::RenderOutputContent(const PaneRenderContext& /*ctx*/) {
 
     ImGui::Dummy(ImVec2(0, 6.0f)); // item 3: halved from 12px, per feedback
 
-    auto outputs = audio_.ListOutputDevices();
+    // Item 2 fix: same per-frame WASAPI enumeration bug as the Input
+    // combo below (see its comment) -- worse here, since this pane is
+    // always visible (no collapse state), so it ran unconditionally on
+    // every single frame for the app's entire lifetime.
+    constexpr double kOutputListRefreshMs = 2000.0;
+    static std::vector<AudioDeviceInfo> cachedOutputs;
+    static double lastOutputListRefresh = -kOutputListRefreshMs;
+    double outputsNowMs = ImGui::GetTime() * 1000.0;
+    if (outputsNowMs - lastOutputListRefresh >= kOutputListRefreshMs) {
+        cachedOutputs = audio_.ListOutputDevices();
+        lastOutputListRefresh = outputsNowMs;
+    }
+    auto& outputs = cachedOutputs;
     std::string preview = selectedOutputDevice_ >= 0 ? "Selected" : "Choose output...";
     for (auto& d : outputs) {
         if (d.index == selectedOutputDevice_) preview = d.name;
@@ -561,7 +589,7 @@ void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
     // child "window" -- distinct from the parent Inputs pane's own
     // background, matching how this looked in an earlier version.
     ImVec4 subsectionBg(0.095f, 0.105f, 0.130f, 1.0f);
-    static bool pcExpanded = true;
+    static bool pcExpanded = false; // item 4: starts collapsed, per feedback
     // Rebuild: no more guessed fixed pixel heights. We measure the actual
     // content height used at the END of each frame (via GetCursorPosY(),
     // which already accounts for every item's real height AND ImGui's
@@ -588,7 +616,26 @@ void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
     if (pcExpanded) {
         ImGui::Dummy(ImVec2(0, 4.0f)); // item 2: halved from 8px, per feedback
         static int selectedInput = -1;
-        auto inputs = audio_.ListInputDevices();
+
+        // Item 2 fix: this used to call ListInputDevices() -- a real WASAPI
+        // COM enumeration call -- unconditionally on EVERY frame while
+        // expanded. That's the exact same bug class already found and
+        // fixed for ADB's device polling elsewhere in this file (per the
+        // project notes: per-frame device polling was the confirmed root
+        // cause of "general UI stutter/dragging jank", not thread
+        // priority). It clearly crept back in here for audio devices.
+        // Same fix: cache it, refresh periodically instead of every frame,
+        // and force an immediate refresh when the user explicitly clicks
+        // Rescan Devices.
+        constexpr double kInputListRefreshMs = 2000.0;
+        static std::vector<AudioDeviceInfo> cachedInputs;
+        static double lastInputListRefresh = -kInputListRefreshMs;
+        double nowMs = ImGui::GetTime() * 1000.0;
+        if (nowMs - lastInputListRefresh >= kInputListRefreshMs) {
+            cachedInputs = audio_.ListInputDevices();
+            lastInputListRefresh = nowMs;
+        }
+        auto& inputs = cachedInputs;
         std::string inPreview = "Choose input...";
         for (auto& d : inputs) if (d.index == selectedInput) inPreview = d.name;
 
@@ -626,6 +673,8 @@ void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
         ImGui::SameLine();
         if (ImGui::Button("Rescan Devices")) {
             if (audio_.RescanDevices()) {
+                cachedInputs = audio_.ListInputDevices(); // immediate refresh, not waiting for the timer
+                lastInputListRefresh = nowMs;
                 PushLogLine("Regulated input devices rescanned.");
             } else {
                 PushLogLine("Rescan needs Output and all Sources stopped first "
@@ -865,11 +914,20 @@ void Gui::RenderSourcesContent(const PaneRenderContext& /*ctx*/) {
     }
 }
 
-void Gui::RenderLogContent(const PaneRenderContext& /*ctx*/) {
+void Gui::RenderLogContent(const PaneRenderContext& ctx) {
+    // Item 8: reserve room at the bottom of this pane for the
+    // Performance button below, instead of the log child filling the
+    // entire pane (-1,-1). Button height is measured from real style
+    // metrics (not guessed) so it can't drift the way earlier magic
+    // pixel heights did this session.
+    float buttonHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0f;
+    constexpr float kButtonTopGap = 8.0f;
+    float logChildHeight = std::max(1.0f, ctx.height - buttonHeight - kButtonTopGap);
+
     // Rounded border around the log CONTENT specifically (standard app
     // rounding, via ChildRounding) -- distinct from the outer pane's own
     // border drawn by DrawSubtlePanelFrame, which only wraps the title.
-    ImGui::BeginChild("##log_content", ImVec2(-1, -1), ImGuiChildFlags_Border);
+    ImGui::BeginChild("##log_content", ImVec2(-1, logChildHeight), ImGuiChildFlags_Border);
 
     // Item 4 fix: the old code called SetScrollHereY(1.0f) unconditionally
     // every frame, which re-pins the view to the bottom on EVERY frame --
@@ -903,6 +961,107 @@ void Gui::RenderLogContent(const PaneRenderContext& /*ctx*/) {
     wasAtBottomLastFrame_ = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f;
 
     ImGui::EndChild();
+
+    ImGui::Dummy(ImVec2(0, kButtonTopGap));
+    if (ImGui::Button("Performance", ImVec2(-1, 0))) {
+        showPerfWindow_ = !showPerfWindow_;
+    }
+}
+
+// Small helper for item 8's "value, with its avg shown right after in a
+// smaller font" layout -- draws the avg via the same raw-AddText-with-
+// explicit-size technique used for subsection titles earlier this
+// session, since this app only has one loaded font size to work with.
+static void DrawStatWithSmallAvg(const char* label, const char* valueText, const char* avgText) {
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(170.0f);
+    ImGui::TextUnformatted(valueText);
+    ImGui::SameLine();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    float smallSize = ImGui::GetFontSize() * 0.8f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float yOffset = (ImGui::GetTextLineHeight() - smallSize) * 0.5f;
+    dl->AddText(ImGui::GetFont(), smallSize, ImVec2(pos.x, pos.y + yOffset),
+                ImGui::GetColorU32(ImGuiCol_TextDisabled), avgText);
+}
+
+void Gui::RenderPerformanceWindow() {
+    if (!showPerfWindow_) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Frame time is free to sample every frame -- just reads io.DeltaTime,
+    // no OS calls -- so it's smoothed continuously, independent of the
+    // CPU/memory throttle below.
+    double frameTimeMs = static_cast<double>(io.DeltaTime) * 1000.0;
+    constexpr double kFrameEmaAlpha = 0.05;
+    perfFrameTimeMsAvg_ = (perfFrameTimeMsAvg_ <= 0.0)
+        ? frameTimeMs
+        : (perfFrameTimeMsAvg_ * (1.0 - kFrameEmaAlpha) + frameTimeMs * kFrameEmaAlpha);
+
+    // CPU% and working-set memory need real OS calls (GetProcessTimes,
+    // GetProcessMemoryInfo) -- throttled to twice a second so leaving this
+    // panel open doesn't add meaningful per-frame overhead. "Lightweight"
+    // was an explicit requirement, not just a nice-to-have here.
+    double nowMs = ImGui::GetTime() * 1000.0;
+    constexpr double kSampleIntervalMs = 500.0;
+    if (nowMs - perfLastSampleMs_ >= kSampleIntervalMs) {
+        FILETIME creationTime, exitTime, kernelTime, userTime;
+        if (GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime, &kernelTime, &userTime)) {
+            ULARGE_INTEGER kernel{}, user{};
+            kernel.LowPart = kernelTime.dwLowDateTime;
+            kernel.HighPart = kernelTime.dwHighDateTime;
+            user.LowPart = userTime.dwLowDateTime;
+            user.HighPart = userTime.dwHighDateTime;
+            uint64_t totalCpu100ns = kernel.QuadPart + user.QuadPart;
+
+            if (perfPrevWallMs_ > 0.0) {
+                double wallDeltaMs = nowMs - perfPrevWallMs_;
+                uint64_t cpuDelta100ns = totalCpu100ns - (perfPrevKernelTime100ns_ + perfPrevUserTime100ns_);
+                double cpuDeltaMs = static_cast<double>(cpuDelta100ns) / 10000.0; // 100ns -> ms
+                SYSTEM_INFO sysInfo;
+                GetSystemInfo(&sysInfo);
+                double numCores = static_cast<double>(std::max<DWORD>(1, sysInfo.dwNumberOfProcessors));
+                if (wallDeltaMs > 0.0) {
+                    perfCpuPercentCur_ = std::clamp((cpuDeltaMs / (wallDeltaMs * numCores)) * 100.0, 0.0, 100.0);
+                    constexpr double kCpuEmaAlpha = 0.3;
+                    perfCpuPercentAvg_ = (perfCpuPercentAvg_ <= 0.0)
+                        ? perfCpuPercentCur_
+                        : (perfCpuPercentAvg_ * (1.0 - kCpuEmaAlpha) + perfCpuPercentCur_ * kCpuEmaAlpha);
+                }
+            }
+            perfPrevKernelTime100ns_ = kernel.QuadPart;
+            perfPrevUserTime100ns_ = user.QuadPart;
+            perfPrevWallMs_ = nowMs;
+        }
+
+        PROCESS_MEMORY_COUNTERS pmc{};
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+            perfWorkingSetMB_ = static_cast<double>(pmc.WorkingSetSize) / (1024.0 * 1024.0);
+        }
+
+        perfLastSampleMs_ = nowMs;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Performance", &showPerfWindow_)) {
+        char valBuf[64], avgBuf[64];
+
+        snprintf(valBuf, sizeof(valBuf), "%.1f%%", perfCpuPercentCur_);
+        snprintf(avgBuf, sizeof(avgBuf), "(avg %.1f%%)", perfCpuPercentAvg_);
+        DrawStatWithSmallAvg("CPU Usage", valBuf, avgBuf);
+
+        snprintf(valBuf, sizeof(valBuf), "%.1f MB", perfWorkingSetMB_);
+        DrawStatWithSmallAvg("Memory (Working Set)", valBuf, ""); // no meaningful avg for a slow-moving absolute value
+
+        snprintf(valBuf, sizeof(valBuf), "%.2f ms", frameTimeMs);
+        snprintf(avgBuf, sizeof(avgBuf), "(avg %.2f ms)", perfFrameTimeMsAvg_);
+        DrawStatWithSmallAvg("Frame Time", valBuf, avgBuf);
+
+        snprintf(valBuf, sizeof(valBuf), "%.0f", io.Framerate);
+        DrawStatWithSmallAvg("FPS", valBuf, "");
+    }
+    ImGui::End();
 }
 
 void Gui::HandleResize(unsigned int width, unsigned int height) {
@@ -974,10 +1133,11 @@ void Gui::RenderFrame() {
 
     if (layout_) {
         constexpr float kOuterMargin = 16.0f; // spec: 16px outer margin on all sides
+        constexpr float kFooterHeight = 22.0f; // item 7: reserved strip for the copyright line
         TilingLayout::Render(*layout_,
                               kOuterMargin, contentY + kOuterMargin,
                               io.DisplaySize.x - kOuterMargin * 2.0f,
-                              io.DisplaySize.y - contentY - kOuterMargin * 2.0f,
+                              io.DisplaySize.y - contentY - kOuterMargin * 2.0f - kFooterHeight,
                               [this](const std::string& paneId, const PaneRenderContext& ctx) {
                                   RenderPane(paneId, ctx);
                               },
@@ -988,6 +1148,35 @@ void Gui::RenderFrame() {
 
     ImGui::End();
     ImGui::PopStyleVar(2); // WindowRounding, WindowBorderSize -- WindowPadding was already popped above
+
+    // Item 7: small copyright line, its own tiny borderless strip at the
+    // very bottom -- separate window rather than fighting the layout
+    // tree for space, since it's static chrome, not a resizable pane.
+    {
+        constexpr float kFooterHeight = 22.0f;
+        ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - kFooterHeight));
+        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, kFooterHeight));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+        ImGui::Begin("##footer", nullptr,
+                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+                      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoInputs);
+        const char* footerText = "\xC2\xA9 2026 Zerrin Siya. This software is released under the MIT License.";
+        ImGui::SetWindowFontScale(0.8f); // small font, per feedback
+        ImVec2 textSize = ImGui::CalcTextSize(footerText);
+        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) * 0.5f,
+                                    (kFooterHeight - textSize.y) * 0.5f));
+        ImGui::TextDisabled("%s", footerText);
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::End();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
+    }
+
+    RenderPerformanceWindow(); // item 8; no-op cost when the panel is closed
 
     ImGui::Render();
 

@@ -98,10 +98,24 @@ bool AdbHandler::Initialize(bool autoDownloadIfMissing) {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         WM_LOG_ERROR("AdbHandler: WSAStartup failed.");
+        asyncInitDone_.store(true, std::memory_order_release);
         return false;
     }
 
-    return IsAvailable();
+    bool ok = adbPath_.has_value() && apkPath_.has_value();
+    asyncInitDone_.store(true, std::memory_order_release);
+    return ok;
+}
+
+void AdbHandler::InitializeAsync(bool autoDownloadIfMissing) {
+    // Joins any previous async init first (shouldn't normally happen --
+    // this is meant to be called once at boot -- but guards against
+    // misuse the same way other places in this file guard their own
+    // async entry points).
+    if (asyncInitThread_.joinable()) asyncInitThread_.join();
+    asyncInitThread_ = std::thread([this, autoDownloadIfMissing]() {
+        Initialize(autoDownloadIfMissing);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +715,15 @@ void AdbHandler::Shutdown() {
 }
 
 void AdbHandler::StopAll() {
+    // Item 1: join the async Initialize() thread first, if it's still
+    // running -- e.g. the user closes the app while the one-time
+    // adb.exe/sndcpy.apk download is still in flight. Must happen before
+    // any other teardown here for the same reason as pendingStarts_
+    // below: letting a background thread keep touching this object's
+    // members after the rest of Shutdown() proceeds is a real
+    // use-after-free risk, not just an ordering nicety.
+    if (asyncInitThread_.joinable()) asyncInitThread_.join();
+
     // Join in-flight async starts FIRST -- they capture Mixer& by
     // reference and call StartCaptureBlocking (which calls mixer.AddSource
     // among other things), so this must complete before returning from

@@ -6,6 +6,7 @@
 #include "layout.h"
 #include <deque>
 #include <mutex>
+#include <cstdint>
 
 // ---------------------------------------------------------------------------
 // gui.h
@@ -76,6 +77,21 @@ private:
     // drag.
     LayoutNode* sourcesSplitNode_ = nullptr;
     bool sourcesRatioSettled_ = false;
+
+    // Item 8: lightweight performance panel state. Sampling itself is
+    // throttled independently of render rate (see RenderPerformanceWindow)
+    // so leaving the panel open doesn't add per-frame OS-call overhead --
+    // it only actually queries CPU/memory a couple times a second.
+    void RenderPerformanceWindow();
+    bool showPerfWindow_ = false;
+    uint64_t perfPrevKernelTime100ns_ = 0;
+    uint64_t perfPrevUserTime100ns_ = 0;
+    double perfPrevWallMs_ = 0.0;
+    double perfLastSampleMs_ = -100000.0; // forces an immediate first sample
+    double perfCpuPercentCur_ = 0.0;
+    double perfCpuPercentAvg_ = 0.0;
+    double perfWorkingSetMB_ = 0.0;
+    double perfFrameTimeMsAvg_ = 0.0;
 
     std::mutex usbQueueMutex_;
     std::deque<std::pair<UsbEvent, UsbDeviceInfo>> usbEventQueue_;

@@ -75,22 +75,18 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     wm::Mixer mixer;
 
     wm::AdbHandler adb;
-    bool adbReady = adb.Initialize();
-    if (!adbReady) {
-        // Non-fatal, and expected on a fresh install: adb.exe/sndcpy.apk
-        // are optional extras the user places in tools/ themselves (see
-        // README) rather than something WireMerge bundles or auto-fetches.
-        // Android app-audio capture just won't be offered in the GUI until
-        // they're present; USB mic/DAC input and everything else works
-        // regardless.
-        WM_LOG_WARN("Android (ADB) audio capture unavailable -- see tools/ "
-                     "folder requirements in README.md if you want this feature.");
-        wm::UiLog::Instance().Push("Android capture unavailable this session "
-                                    "(adb/sndcpy not found in tools/) -- see Log for detail.");
-    } else {
-        WM_LOG_INFO("ADB + sndcpy ready -- Android app-audio capture available.");
-        wm::UiLog::Instance().Push("Android capture ready (ADB + sndcpy found).");
-    }
+    // Item 1 fix: this used to be a blocking adb.Initialize() call, which
+    // is exactly what the "startup takes 5 seconds" report traced back
+    // to -- on a fresh/stripped-down install (tools/ missing), Initialize()
+    // does a real network fetch for adb.exe + sndcpy.apk before the GUI
+    // window even exists. InitializeAsync() runs the same work on a
+    // background thread instead; the window now appears immediately and
+    // Android capture becomes available a few seconds later once it
+    // finishes (the Devices panel already re-checks adb.IsAvailable()
+    // every frame, so no extra wiring was needed there).
+    adb.InitializeAsync();
+    wm::UiLog::Instance().Push("Android capture: checking for adb/sndcpy in tools/ "
+                                "(see Log for detail once ready)...");
 
     // Consolidated boot summary (3.1) -- one line covering every
     // subsystem's readiness. Pushed to BOTH the full internal log AND the
@@ -99,9 +95,10 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     // the app itself, not just the log file (see UiLog's doc comment for
     // why a separate buffer is needed at all: Gui doesn't exist yet at
     // this point in boot, so Gui::PushLogLine can't be called directly).
+    // Android's status is intentionally left out here -- it's not known
+    // yet, since its init is now async (see above).
     std::string bootSummary = std::string("Startup complete -- PortAudio: OK, USB hotplug: ") +
-                (usbReady ? "OK" : "unavailable") + ", Android capture: " +
-                (adbReady ? "OK" : "unavailable") + ".";
+                (usbReady ? "OK" : "unavailable") + ", Android capture: checking...";
     WM_LOG_INFO(bootSummary);
     wm::UiLog::Instance().Push(bootSummary);
 

@@ -55,6 +55,12 @@ struct LayoutNode {
     float ratio = 0.5f; // 0..1, how much of the split the first child gets
     LayoutNodePtr first;
     LayoutNodePtr second;
+
+    // Item 3: current fade-in/out opacity of this split's splitter
+    // highlight (0 = fully at-rest/greyed, 1 = fully "alive"/hovered).
+    // Persists frame-to-frame on the node itself so it can ease smoothly
+    // instead of snapping on/off.
+    float splitterAlpha = 0.0f;
 };
 
 struct PaneRenderContext {

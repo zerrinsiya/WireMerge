@@ -46,12 +46,23 @@ PaneRenderContext DrawSubtlePanelFrame(const std::string& label, float x, float 
     // Inner content rect: full margin's worth of gap after the divider
     // too (previously half), matching the same spacing used everywhere
     // else around this pane.
+    //
+    // Item 6 fix: floor is 1.0f, NOT 0.0f. ImGui's BeginChild treats a
+    // size of EXACTLY 0.0f as a special sentinel meaning "auto-fill the
+    // remaining space in the parent window" (same convention as Begin()
+    // auto-sizing) -- it does NOT mean "zero-size, clip everything".
+    // When a pane got shrunk small enough via the splitter that this
+    // computation hit 0.0f exactly, the content child would silently
+    // balloon to fill the ENTIRE root window instead of collapsing with
+    // it, which is exactly "contents clip out of the borders" on a
+    // minimized pane: the tiny drawn border stayed tiny, but the actual
+    // interactive/rendered child behind it was full-size.
     float contentY = dividerY + margin;
     PaneRenderContext inner{
         x + margin,
         contentY,
-        std::max(0.0f, width - margin * 2.0f),
-        std::max(0.0f, (y + height) - contentY - margin)
+        std::max(1.0f, width - margin * 2.0f),
+        std::max(1.0f, (y + height) - contentY - margin)
     };
     return inner;
 }
@@ -196,40 +207,67 @@ void TilingLayout::RenderNode(LayoutNode& node, float x, float y, float width, f
         }
     }
 
-    // Subtle visual so the splitter is discoverable without looking like a
-    // hard corporate divider line -- drawn only while hovered/active,
-    // invisible otherwise so it doesn't clutter the flat/HTML-ish look.
-    // Thinner than the full hitbox (half its size) and inset/centered
-    // within it, rather than filling the whole hitbox edge-to-edge -- the
-    // hitbox itself stays the full size for easy grabbing, only the
-    // VISIBLE highlight shrinks and gets breathing room around it.
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        ImU32 col = ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
-
-        float visibleThickness = (horizontal ? splitterW : splitterH) * 0.5f;
-        float totalThickness = horizontal ? splitterW : splitterH;
-        float thicknessInset = (totalThickness - visibleThickness) * 0.5f;
-
-        // Shorten the highlight along its LENGTH too -- previously it
-        // spanned the entire pane boundary (splitterH for a horizontal
-        // splitter, splitterW for a vertical one), which read as "very
-        // basic"/a full divider line. Now a short segment centered along
-        // that boundary, capped so it never exceeds the actual available
-        // length on very small panes.
-        float boundaryLength = horizontal ? splitterH : splitterW;
-        float visibleLength = std::min(128.0f, boundaryLength); // doubled from 64px, per feedback
-        float lengthInset = (boundaryLength - visibleLength) * 0.5f;
-
-        ImVec2 hiMin, hiMax;
-        if (horizontal) {
-            hiMin = ImVec2(splitterX + thicknessInset, splitterY + lengthInset);
-            hiMax = ImVec2(splitterX + thicknessInset + visibleThickness, splitterY + lengthInset + visibleLength);
-        } else {
-            hiMin = ImVec2(splitterX + lengthInset, splitterY + thicknessInset);
-            hiMax = ImVec2(splitterX + lengthInset + visibleLength, splitterY + thicknessInset + visibleThickness);
+    // Item 3: greyed-out by default (not fully invisible), fading up to
+    // the full accent color on hover/drag, and fading back down when the
+    // mouse leaves -- instead of the old hard on/off. splitterAlpha is
+    // eased toward a target each frame and persists on the node so the
+    // fade is smooth across frames rather than snapping.
+    {
+        bool hoveredOrActive = ImGui::IsItemHovered() || ImGui::IsItemActive();
+        float target = hoveredOrActive ? 1.0f : 0.0f;
+        float dt = ImGui::GetIO().DeltaTime;
+        constexpr float kFadeSpeed = 9.0f; // full fade over ~110ms
+        if (node.splitterAlpha < target) {
+            node.splitterAlpha = std::min(target, node.splitterAlpha + kFadeSpeed * dt);
+        } else if (node.splitterAlpha > target) {
+            node.splitterAlpha = std::max(target, node.splitterAlpha - kFadeSpeed * dt);
         }
-        drawList->AddRectFilled(hiMin, hiMax, col, 2.0f);
+
+        // Only skip the draw call once fully faded out -- avoids a wasted
+        // draw call at rest without reintroducing the old hard pop-in.
+        if (node.splitterAlpha > 0.001f) {
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            ImVec4 restCol = ImGui::GetStyleColorVec4(ImGuiCol_Border); // subtle grey baseline
+            ImVec4 hotCol = ImGui::GetStyleColorVec4(ImGui::IsItemActive() ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
+            // Plain manual lerp -- ImLerp() lives in imgui_internal.h, which
+            // this file deliberately doesn't include (this is public-API-
+            // only code); a hand-written lerp has zero dependency risk.
+            float t = node.splitterAlpha;
+            ImVec4 blended(restCol.x + (hotCol.x - restCol.x) * t,
+                            restCol.y + (hotCol.y - restCol.y) * t,
+                            restCol.z + (hotCol.z - restCol.z) * t,
+                            restCol.w + (hotCol.w - restCol.w) * t);
+            // Baseline alpha stays low ("greyed out") even at full rest
+            // opacity of the lerp target; only visible at all once
+            // splitterAlpha has risen above ~0, per "fade in on hover".
+            constexpr float kRestAlpha = 0.25f;
+            blended.w = kRestAlpha + (hotCol.w - kRestAlpha) * t;
+            ImU32 col = ImGui::GetColorU32(blended);
+
+            float visibleThickness = (horizontal ? splitterW : splitterH) * 0.5f;
+            float totalThickness = horizontal ? splitterW : splitterH;
+            float thicknessInset = (totalThickness - visibleThickness) * 0.5f;
+
+            // Shorten the highlight along its LENGTH too -- previously it
+            // spanned the entire pane boundary (splitterH for a horizontal
+            // splitter, splitterW for a vertical one), which read as "very
+            // basic"/a full divider line. Now a short segment centered along
+            // that boundary, capped so it never exceeds the actual available
+            // length on very small panes.
+            float boundaryLength = horizontal ? splitterH : splitterW;
+            float visibleLength = std::min(128.0f, boundaryLength); // doubled from 64px, per feedback
+            float lengthInset = (boundaryLength - visibleLength) * 0.5f;
+
+            ImVec2 hiMin, hiMax;
+            if (horizontal) {
+                hiMin = ImVec2(splitterX + thicknessInset, splitterY + lengthInset);
+                hiMax = ImVec2(splitterX + thicknessInset + visibleThickness, splitterY + lengthInset + visibleLength);
+            } else {
+                hiMin = ImVec2(splitterX + lengthInset, splitterY + thicknessInset);
+                hiMax = ImVec2(splitterX + lengthInset + visibleLength, splitterY + thicknessInset + visibleThickness);
+            }
+            drawList->AddRectFilled(hiMin, hiMax, col, 2.0f);
+        }
     }
     ImGui::PopID();
 
