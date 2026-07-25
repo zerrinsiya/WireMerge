@@ -65,7 +65,7 @@ bool AdbHandler::Initialize(bool autoDownloadIfMissing) {
         if (slash != std::string::npos) dir = dir.substr(0, slash + 1);
         std::string toolsDir = dir + "tools";
 
-        WM_LOG_INFO("AdbHandler: tools/ incomplete -- this is expected only if you're "
+        WM_LOG_INFO("AdbHandler: tools/ incomplete. This is expected only if you're "
                      "running a stripped-down build; normal WireMerge distributions "
                      "ship tools/ already populated. Attempting a one-time auto-download "
                      "as a fallback (requires internet access)...");
@@ -115,6 +115,51 @@ void AdbHandler::InitializeAsync(bool autoDownloadIfMissing) {
     if (asyncInitThread_.joinable()) asyncInitThread_.join();
     asyncInitThread_ = std::thread([this, autoDownloadIfMissing]() {
         Initialize(autoDownloadIfMissing);
+    });
+}
+
+void AdbHandler::DownloadToolsAsync() {
+    if (downloadInProgress_.load(std::memory_order_acquire)) return; // already running, don't double-fire
+    if (downloadThread_.joinable()) downloadThread_.join();
+    downloadInProgress_.store(true, std::memory_order_release);
+
+    downloadThread_ = std::thread([this]() {
+        // Same toolsDir resolution Initialize() uses for the fallback
+        // path, duplicated here rather than shared because Initialize()
+        // computes it inline (not its own reusable helper) and this is a
+        // simple two-line computation not worth a bigger refactor just
+        // to share it.
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+        std::string dir(exePath);
+        size_t slash = dir.find_last_of("\\/");
+        if (slash != std::string::npos) dir = dir.substr(0, slash + 1);
+        std::string toolsDir = dir + "tools";
+
+        WM_LOG_INFO("AdbHandler: downloading tools (user-consented)...");
+        TryAutoDownload(toolsDir);
+
+        std::string adb = FindNextToExe("adb.exe");
+        std::string apk = FindNextToExe("sndcpy.apk");
+        if (!adb.empty()) adbPath_ = adb;
+        if (!apk.empty()) apkPath_ = apk;
+
+        if (adbPath_.has_value() && apkPath_.has_value()) {
+            WM_LOG_INFO("AdbHandler: download complete. Android app-audio capture now available.");
+        } else {
+            WM_LOG_WARN("AdbHandler: download did not fully succeed. Android app-audio "
+                         "capture still unavailable. See earlier log lines for detail.");
+        }
+
+        // Re-publish asyncInitDone_ (already true from boot) specifically
+        // to get its release-store, which is what makes the adbPath_/
+        // apkPath_ writes above safely visible to IsAvailable()'s
+        // acquire-load on another thread -- same mechanism used
+        // everywhere else in this file, just reused here rather than
+        // introducing a second synchronization variable for the same
+        // purpose.
+        asyncInitDone_.store(true, std::memory_order_release);
+        downloadInProgress_.store(false, std::memory_order_release);
     });
 }
 
@@ -289,7 +334,7 @@ bool AdbHandler::TryAutoDownload(const std::string& toolsDir) {
             } else {
                 WM_LOG_ERROR("AdbHandler: could not find any .apk or .zip asset in the "
                               "sndcpy latest-release API response; the release format may "
-                              "have changed. Manual download required -- see README.");
+                              "have changed. Manual download required, see README.");
             }
         }
 
@@ -632,7 +677,7 @@ void AdbHandler::ReaderLoop(Session* session, Mixer* mixer) {
                 if (consecutiveTimeouts >= kMaxConsecutiveTimeouts) {
                     WM_LOG_WARN("AdbHandler: no audio data from phone for " +
                                  std::to_string(kMaxConsecutiveTimeouts * 3) +
-                                 "s -- treating capture as stalled (phone may have locked, "
+                                 "s, treating capture as stalled (phone may have locked, "
                                  "the app may have been backgrounded/killed, or the cable "
                                  "was disturbed). Stopping this source; restart capture from "
                                  "the Android panel if the phone is still connected.");
@@ -676,7 +721,7 @@ void AdbHandler::ReaderLoop(Session* session, Mixer* mixer) {
     uint64_t underrunFrames = mixer->GetUnderrunFrames(session->sourceId);
     double underrunMs = static_cast<double>(underrunFrames) / kSndcpySampleRate * 1000.0;
     WM_LOG_INFO("Android source for " + session->deviceSerial +
-                " removed -- total time spent in underrun (audible silence gaps) "
+                " removed. Total time spent in underrun (audible silence gaps) "
                 "this session: ~" + std::to_string(static_cast<long long>(underrunMs)) + "ms");
 
     mixer->RemoveSource(session->sourceId);
@@ -715,14 +760,12 @@ void AdbHandler::Shutdown() {
 }
 
 void AdbHandler::StopAll() {
-    // Item 1: join the async Initialize() thread first, if it's still
-    // running -- e.g. the user closes the app while the one-time
-    // adb.exe/sndcpy.apk download is still in flight. Must happen before
-    // any other teardown here for the same reason as pendingStarts_
-    // below: letting a background thread keep touching this object's
-    // members after the rest of Shutdown() proceeds is a real
-    // use-after-free risk, not just an ordering nicety.
+    // Item 1/3: join both background threads that touch this object's
+    // own members (init check, and the consent-gated download) before
+    // any other teardown -- same use-after-free reasoning as
+    // pendingStarts_ below.
     if (asyncInitThread_.joinable()) asyncInitThread_.join();
+    if (downloadThread_.joinable()) downloadThread_.join();
 
     // Join in-flight async starts FIRST -- they capture Mixer& by
     // reference and call StartCaptureBlocking (which calls mixer.AddSource

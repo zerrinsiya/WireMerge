@@ -94,6 +94,15 @@ public:
     // unavailable" -- IsAvailable() alone can't tell those apart.
     bool IsAsyncInitDone() const { return asyncInitDone_.load(std::memory_order_acquire); }
 
+    // Item 3: consent-gated download. Boot no longer auto-downloads on
+    // its own (see main.cpp) -- this is called only when the user
+    // explicitly agrees, either from the first-run prompt or by
+    // clicking "Download Tools" later after having declined it. Runs on
+    // a background thread for the same reason InitializeAsync does: it's
+    // a real network fetch.
+    void DownloadToolsAsync();
+    bool IsDownloadInProgress() const { return downloadInProgress_.load(std::memory_order_acquire); }
+
     std::vector<AdbDeviceInfo> ListDevices() const;
 
     // Installs the helper app (if not already installed), grants the
@@ -187,6 +196,13 @@ private:
     // other teardown, same ordering reasoning as pendingStarts_ below.
     std::thread asyncInitThread_;
     std::atomic<bool> asyncInitDone_{false};
+    // Item 3: separate from asyncInitThread_ above -- this one runs the
+    // consent-gated download specifically (triggered by the user
+    // clicking "Download" in the prompt, or "Download Tools" later if
+    // they declined the first time). Joined in StopAll() alongside
+    // asyncInitThread_, same use-after-free reasoning.
+    std::thread downloadThread_;
+    std::atomic<bool> downloadInProgress_{false};
     // Tracks whether adb.exe has actually been invoked this session (any
     // RunAdb/FireAndForgetAdb call) -- used at shutdown to skip the
     // kill-server cleanup call entirely when adb was never touched (e.g.

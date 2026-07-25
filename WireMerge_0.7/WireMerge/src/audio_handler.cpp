@@ -309,7 +309,7 @@ SourceId AudioHandler::OpenInputSource(Mixer& mixer, int deviceIndex,
                              paFramesPerBufferUnspecified, paNoFlag,
                              InputCallback, ctx);
         if (err == paNoError) {
-            WM_LOG_WARN("Opened at native rate -- this source may sound pitch/speed-shifted "
+            WM_LOG_WARN("Opened at native rate. This source may sound pitch/speed-shifted "
                         "relative to other sources since it isn't resampled to match them.");
         }
     }
@@ -381,7 +381,7 @@ bool AudioHandler::OpenOutput(Mixer& mixer, int deviceIndex, int channels, int s
                              paFramesPerBufferUnspecified, paNoFlag,
                              OutputCallback, ctx);
         if (err == paNoError) {
-            WM_LOG_WARN("Opened at native rate -- sources running at a different rate than "
+            WM_LOG_WARN("Opened at native rate. Sources running at a different rate than "
                         "this may sound pitch/speed-shifted since Mixer doesn't resample.");
         }
     }

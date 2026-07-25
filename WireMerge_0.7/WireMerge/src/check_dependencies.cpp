@@ -93,7 +93,7 @@ bool ReportDependencyStatus(const std::vector<DependencyStatus>& statuses) {
     missingMsg << "WireMerge is missing one or more required components:\n\n";
 
     for (const auto& s : statuses) {
-        WM_LOG_INFO((s.found ? "[OK] " : "[MISSING] ") + s.name + " -- " + s.details);
+        WM_LOG_INFO((s.found ? "[OK] " : "[MISSING] ") + s.name + ": " + s.details);
         if (!s.found) {
             allFound = false;
             missingMsg << "- " << s.name << "\n  " << s.details << "\n\n";

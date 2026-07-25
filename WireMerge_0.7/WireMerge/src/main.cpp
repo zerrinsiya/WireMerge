@@ -75,16 +75,15 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     wm::Mixer mixer;
 
     wm::AdbHandler adb;
-    // Item 1 fix: this used to be a blocking adb.Initialize() call, which
-    // is exactly what the "startup takes 5 seconds" report traced back
-    // to -- on a fresh/stripped-down install (tools/ missing), Initialize()
-    // does a real network fetch for adb.exe + sndcpy.apk before the GUI
-    // window even exists. InitializeAsync() runs the same work on a
-    // background thread instead; the window now appears immediately and
-    // Android capture becomes available a few seconds later once it
-    // finishes (the Devices panel already re-checks adb.IsAvailable()
-    // every frame, so no extra wiring was needed there).
-    adb.InitializeAsync();
+    // Item 3: no longer auto-downloads without asking. This now only
+    // CHECKS whether tools/ is already populated (fast, no network) --
+    // if not, the GUI prompts the user for consent before downloading
+    // anything (see Gui::RenderToolsDownloadPrompt). Still async per
+    // item 1's fix, though with autoDownloadIfMissing=false this
+    // finishes almost immediately either way; kept async for
+    // consistency/robustness rather than re-introducing a synchronous
+    // call here.
+    adb.InitializeAsync(/*autoDownloadIfMissing=*/false);
     wm::UiLog::Instance().Push("Android capture: checking for adb/sndcpy in tools/ "
                                 "(see Log for detail once ready)...");
 
@@ -97,7 +96,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     // this point in boot, so Gui::PushLogLine can't be called directly).
     // Android's status is intentionally left out here -- it's not known
     // yet, since its init is now async (see above).
-    std::string bootSummary = std::string("Startup complete -- PortAudio: OK, USB hotplug: ") +
+    std::string bootSummary = std::string("Startup complete. PortAudio: OK, USB hotplug: ") +
                 (usbReady ? "OK" : "unavailable") + ", Android capture: checking...";
     WM_LOG_INFO(bootSummary);
     wm::UiLog::Instance().Push(bootSummary);

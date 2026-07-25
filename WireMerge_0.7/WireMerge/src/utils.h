@@ -17,13 +17,13 @@ namespace wm {
 // Single source of truth for the version string. Update this one line on
 // release; everything else (window title, log startup line, About text)
 // reads from here rather than hardcoding the version separately.
-inline constexpr const char* kWireMergeVersion = "WireMerge_0.6.5";
+inline constexpr const char* kWireMergeVersion = "WireMerge_0.7";
 
 enum class LogLevel { Debug, Info, Warn, Error };
 
 // Thread-safe logger. Writes to stdout (visible if launched from a console)
 // and to WireMerge.log next to the executable. Cheap enough to call from
-// the audio callback's *setup* code, but avoid calling it from inside the
+// the audio callback's setup code, but avoid calling it from inside the
 // realtime PortAudio callback itself (file I/O there can cause glitches).
 class Logger {
 public:

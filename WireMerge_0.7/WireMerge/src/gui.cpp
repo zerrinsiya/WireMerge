@@ -401,7 +401,7 @@ void Gui::LogUnderrunSummaryBeforeRemoval(SourceId id, const std::string& source
     // is the last point the total is readable. Item 3.3.
     uint64_t underrunFrames = mixer_.GetUnderrunFrames(id);
     double underrunMs = static_cast<double>(underrunFrames) / 48000.0 * 1000.0;
-    PushLogLine("Removed '" + sourceName + "' -- total time spent in underrun (audible "
+    PushLogLine("Removed '" + sourceName + "'. Total time spent in underrun (audible "
                 "silence gaps) this session: ~" + std::to_string(static_cast<long long>(underrunMs)) + "ms");
 }
 
@@ -461,6 +461,19 @@ void Gui::RenderToolbar(float& outContentY) {
     ImGui::PopStyleColor(3);
     if (exitClicked) {
         RequestExit();
+    }
+
+    // Item 2: Performance button lives here in the toolbar now, same
+    // treatment as Exit WireMerge (not inside the Log pane) -- just to
+    // its left, normal (non-red) styling since it's not a destructive
+    // action.
+    const char* perfLabel = "Performance";
+    ImVec2 perfSize = ImGui::CalcTextSize(perfLabel);
+    float perfWidth = perfSize.x + exitPad.x * 2.0f;
+    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - exitWidth - 24.0f - perfWidth - 12.0f,
+                                (toolbarHeight - exitHeight) * 0.5f + 4.0f));
+    if (ImGui::Button(perfLabel, ImVec2(perfWidth, exitHeight))) {
+        showPerfWindow_ = !showPerfWindow_;
     }
 
     // Subtle bottom border separating the header from content, drawn
@@ -569,7 +582,7 @@ void Gui::RenderOutputContent(const PaneRenderContext& /*ctx*/) {
             outputOpen_ = true;
             PushLogLine("Output started.");
         } else {
-            PushLogLine("Failed to start output -- check log file for details.");
+            PushLogLine("Failed to start output. Check log file for details.");
         }
     }
     ImGui::EndDisabled();
@@ -665,7 +678,7 @@ void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
                 for (auto& d : inputs) if (d.index == selectedInput) name = d.name;
                 PushLogLine("Regulated input added: " + name + ".");
             } else {
-                PushLogLine("Failed to add regulated input -- check log file.");
+                PushLogLine("Failed to add regulated input. Check log file.");
             }
         }
         ImGui::EndDisabled();
@@ -712,8 +725,21 @@ void Gui::RenderDevicesContent(const PaneRenderContext& /*ctx*/) {
     if (androidExpanded) {
         ImGui::Dummy(ImVec2(0, 4.0f)); // item 2: halved from 8px, per feedback
         if (!adb_.IsAvailable()) {
-            ImGui::TextWrapped("Not set up: adb.exe / sndcpy.apk missing from "
-                                "'tools' (see Log / README).");
+            if (adb_.IsDownloadInProgress()) {
+                ImGui::TextWrapped("Downloading adb.exe / sndcpy.apk...");
+            } else {
+                ImGui::TextWrapped("Not set up: adb.exe / sndcpy.apk missing from "
+                                    "'tools' (see Log / README).");
+                ImGui::Dummy(ImVec2(0, 4.0f));
+                // Item 3: re-opens the same consent prompt rather than
+                // downloading directly -- if the user said "Not Now"
+                // once, clicking this should ask again, not silently
+                // start a network fetch behind their back the second
+                // time either.
+                if (ImGui::Button("Download Tools")) {
+                    showToolsDownloadPrompt_ = true;
+                }
+            }
             androidContentHeight = ImGui::GetCursorPosY(); // measure this shorter state too
             ImGui::EndChild();
             ImGui::PopStyleColor();
@@ -782,7 +808,7 @@ void Gui::RenderDevicesContent(const PaneRenderContext& /*ctx*/) {
                     PushLogLine("Started Android capture for " + d.serial + " (source added).");
                 } else {
                     PushLogLine("Failed to start Android capture for " + d.serial +
-                                " -- check log file for details.");
+                                ". Check log file for details.");
                 }
             }
         }
@@ -809,7 +835,7 @@ void Gui::RenderDevicesContent(const PaneRenderContext& /*ctx*/) {
 
         if (starting) {
             ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f),
-                                "Starting on %s -- check phone for prompt.", selectedSerial.c_str());
+                                "Starting on %s. Check phone for prompt.", selectedSerial.c_str());
         }
 
         androidContentHeight = ImGui::GetCursorPosY(); // measured for next frame's expandedHeight
@@ -914,20 +940,11 @@ void Gui::RenderSourcesContent(const PaneRenderContext& /*ctx*/) {
     }
 }
 
-void Gui::RenderLogContent(const PaneRenderContext& ctx) {
-    // Item 8: reserve room at the bottom of this pane for the
-    // Performance button below, instead of the log child filling the
-    // entire pane (-1,-1). Button height is measured from real style
-    // metrics (not guessed) so it can't drift the way earlier magic
-    // pixel heights did this session.
-    float buttonHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0f;
-    constexpr float kButtonTopGap = 8.0f;
-    float logChildHeight = std::max(1.0f, ctx.height - buttonHeight - kButtonTopGap);
-
+void Gui::RenderLogContent(const PaneRenderContext& /*ctx*/) {
     // Rounded border around the log CONTENT specifically (standard app
     // rounding, via ChildRounding) -- distinct from the outer pane's own
     // border drawn by DrawSubtlePanelFrame, which only wraps the title.
-    ImGui::BeginChild("##log_content", ImVec2(-1, logChildHeight), ImGuiChildFlags_Border);
+    ImGui::BeginChild("##log_content", ImVec2(-1, -1), ImGuiChildFlags_Border);
 
     // Item 4 fix: the old code called SetScrollHereY(1.0f) unconditionally
     // every frame, which re-pins the view to the bottom on EVERY frame --
@@ -961,28 +978,94 @@ void Gui::RenderLogContent(const PaneRenderContext& ctx) {
     wasAtBottomLastFrame_ = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f;
 
     ImGui::EndChild();
+}
 
-    ImGui::Dummy(ImVec2(0, kButtonTopGap));
-    if (ImGui::Button("Performance", ImVec2(-1, 0))) {
-        showPerfWindow_ = !showPerfWindow_;
+// Item 3: consent-gated download prompt. Auto-opens once, the first time
+// we learn tools/ is actually missing; after that only the "Download
+// Tools" button in the Devices panel can reopen it (see
+// RenderDevicesContent). AlwaysAutoResize + NoSavedSettings for the same
+// reasons as the Performance window -- see item 5/8's fix there.
+void Gui::RenderToolsDownloadPrompt() {
+    // Item 1: log the outcome of the initial (no-download) tools check
+    // to the on-screen Log panel once, as soon as it's known -- WM_LOG_*
+    // calls inside AdbHandler only reach the file/console log, not this
+    // panel (see PushLogLine), so without this the user has no on-screen
+    // record of whether tools were found at startup.
+    if (!loggedInitialToolsCheck_ && adb_.IsAsyncInitDone()) {
+        loggedInitialToolsCheck_ = true;
+        if (adb_.IsAvailable()) {
+            PushLogLine("Android capture tools found in tools/. Android capture is ready.");
+        } else {
+            PushLogLine("Android capture tools not found in tools/. Android capture is unavailable "
+                        "until installed.");
+        }
+    }
+
+    // Item 1: log the download finishing, the same way -- edge-detected
+    // on IsDownloadInProgress() going from true to false.
+    bool isDownloading = adb_.IsDownloadInProgress();
+    if (wasDownloadInProgress_ && !isDownloading) {
+        if (adb_.IsAvailable()) {
+            PushLogLine("Android capture tools installed successfully. Android capture is ready.");
+        } else {
+            PushLogLine("Android capture tools installation failed. See Log for detail, or try "
+                        "Download Tools again.");
+        }
+    }
+    wasDownloadInProgress_ = isDownloading;
+
+    if (!toolsPromptShown_ && adb_.IsAsyncInitDone() && !adb_.IsAvailable() && !adb_.IsDownloadInProgress()) {
+        toolsPromptShown_ = true;
+        showToolsDownloadPrompt_ = true;
+    }
+
+    if (showToolsDownloadPrompt_) {
+        ImGui::OpenPopup("Download Android Capture Tools?");
+        showToolsDownloadPrompt_ = false; // OpenPopup only needs to fire once per open
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Download Android Capture Tools?", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
+        ImGui::TextWrapped("WireMerge can download the small ADB + sndcpy tools needed for "
+                            "Android app-audio capture (phone audio over USB) from the internet.");
+        ImGui::TextWrapped("This is entirely optional. Everything else (USB mic/DAC input and "
+                            "output) works without it.");
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, 10.0f));
+
+        if (ImGui::Button("Download", ImVec2(120, 0))) {
+            adb_.DownloadToolsAsync();
+            PushLogLine("Downloading Android capture tools (adb.exe + sndcpy.apk)...");
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Not Now", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }
 
-// Small helper for item 8's "value, with its avg shown right after in a
-// smaller font" layout -- draws the avg via the same raw-AddText-with-
-// explicit-size technique used for subsection titles earlier this
-// session, since this app only has one loaded font size to work with.
-static void DrawStatWithSmallAvg(const char* label, const char* valueText, const char* avgText) {
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine(170.0f);
-    ImGui::TextUnformatted(valueText);
-    ImGui::SameLine();
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    float smallSize = ImGui::GetFontSize() * 0.8f;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    float yOffset = (ImGui::GetTextLineHeight() - smallSize) * 0.5f;
-    dl->AddText(ImGui::GetFont(), smallSize, ImVec2(pos.x, pos.y + yOffset),
-                ImGui::GetColorU32(ImGuiCol_TextDisabled), avgText);
+// Item 4/5 rebuild: the old DrawStatWithSmallAvg used an ABSOLUTE
+// SameLine(170.0f) position plus a raw ImDrawList::AddText call that
+// never reserved any layout space for itself. That's exactly what
+// "mashed"/unreadable meant in practice: combined with item 5's window
+// starting tiny (see RenderPerformanceWindow's window-flags fix below),
+// text at a hardcoded x=170 in a much narrower window overlapped
+// everything else. Rebuilt to use only standard, self-sizing ImGui item
+// flow -- the label+value on one line, a genuinely smaller second line
+// underneath for extra detail (via SetWindowFontScale, same technique
+// used for the toolbar title elsewhere in this file), nothing manually
+// positioned.
+static void DrawStatRow(const char* label, const char* valueText, const char* detailText = nullptr) {
+    ImGui::Text("%s: %s", label, valueText);
+    if (detailText && detailText[0] != '\0') {
+        ImGui::SetWindowFontScale(0.8f);
+        ImGui::TextDisabled("%s", detailText);
+        ImGui::SetWindowFontScale(1.0f);
+    }
 }
 
 void Gui::RenderPerformanceWindow() {
@@ -999,10 +1082,10 @@ void Gui::RenderPerformanceWindow() {
         ? frameTimeMs
         : (perfFrameTimeMsAvg_ * (1.0 - kFrameEmaAlpha) + frameTimeMs * kFrameEmaAlpha);
 
-    // CPU% and working-set memory need real OS calls (GetProcessTimes,
-    // GetProcessMemoryInfo) -- throttled to twice a second so leaving this
-    // panel open doesn't add meaningful per-frame overhead. "Lightweight"
-    // was an explicit requirement, not just a nice-to-have here.
+    // Everything below needs real OS calls -- throttled to twice a second
+    // so leaving this panel open doesn't add meaningful per-frame
+    // overhead. "Lightweight" was an explicit requirement here, not just
+    // a nice-to-have.
     double nowMs = ImGui::GetTime() * 1000.0;
     constexpr double kSampleIntervalMs = 500.0;
     if (nowMs - perfLastSampleMs_ >= kSampleIntervalMs) {
@@ -1033,33 +1116,102 @@ void Gui::RenderPerformanceWindow() {
             perfPrevKernelTime100ns_ = kernel.QuadPart;
             perfPrevUserTime100ns_ = user.QuadPart;
             perfPrevWallMs_ = nowMs;
+
+            // Uptime: creationTime is already a FILETIME from the call
+            // above, free to reuse -- just needs "now" to diff against.
+            FILETIME nowFt;
+            GetSystemTimeAsFileTime(&nowFt);
+            ULARGE_INTEGER created{}, now{};
+            created.LowPart = creationTime.dwLowDateTime;
+            created.HighPart = creationTime.dwHighDateTime;
+            now.LowPart = nowFt.dwLowDateTime;
+            now.HighPart = nowFt.dwHighDateTime;
+            perfUptimeSeconds_ = static_cast<double>(now.QuadPart - created.QuadPart) / 10000000.0; // 100ns -> s
         }
 
-        PROCESS_MEMORY_COUNTERS pmc{};
-        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        // Item 4: "geek user" stats -- everything here is a single cheap
+        // Win32 call (GetProcessMemoryInfo already covers Working Set,
+        // Peak Working Set, Private Bytes/commit, AND Page Faults in one
+        // call), still gated behind the same 500ms throttle.
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb = sizeof(pmc);
+        if (GetProcessMemoryInfo(GetCurrentProcess(),
+                                  reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc))) {
             perfWorkingSetMB_ = static_cast<double>(pmc.WorkingSetSize) / (1024.0 * 1024.0);
+            perfPeakWorkingSetMB_ = static_cast<double>(pmc.PeakWorkingSetSize) / (1024.0 * 1024.0);
+            perfPrivateBytesMB_ = static_cast<double>(pmc.PrivateUsage) / (1024.0 * 1024.0);
+            perfPageFaultCount_ = pmc.PageFaultCount;
         }
+
+        DWORD handleCount = 0;
+        if (GetProcessHandleCount(GetCurrentProcess(), &handleCount)) {
+            perfHandleCount_ = handleCount;
+        }
+        perfGdiObjectCount_ = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+        perfUserObjectCount_ = GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
 
         perfLastSampleMs_ = nowMs;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Performance", &showPerfWindow_)) {
-        char valBuf[64], avgBuf[64];
+    // Item 5/8 fix: root cause of "starts out super small" was twofold --
+    // (a) ImGuiCond_FirstUseEver defers to any size already saved in
+    // imgui.ini, and this window (unlike every OTHER ad-hoc window in
+    // this file) never opted out via NoSavedSettings, so a bad early
+    // size got persisted and stuck forever; (b) AlwaysAutoResize wasn't
+    // used, so there was a fixed-size guess to get wrong in the first
+    // place. AlwaysAutoResize + NoSavedSettings together mean this
+    // window is ALWAYS sized exactly to its actual content, every
+    // launch, with nothing to guess or persist.
+    ImGui::Begin("Performance", &showPerfWindow_,
+                  ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    {
+        char val[64], detail[96];
 
-        snprintf(valBuf, sizeof(valBuf), "%.1f%%", perfCpuPercentCur_);
-        snprintf(avgBuf, sizeof(avgBuf), "(avg %.1f%%)", perfCpuPercentAvg_);
-        DrawStatWithSmallAvg("CPU Usage", valBuf, avgBuf);
+        snprintf(val, sizeof(val), "%.1f%%", perfCpuPercentCur_);
+        snprintf(detail, sizeof(detail), "avg %.1f%%", perfCpuPercentAvg_);
+        DrawStatRow("CPU Usage", val, detail);
 
-        snprintf(valBuf, sizeof(valBuf), "%.1f MB", perfWorkingSetMB_);
-        DrawStatWithSmallAvg("Memory (Working Set)", valBuf, ""); // no meaningful avg for a slow-moving absolute value
+        ImGui::Dummy(ImVec2(0, 6.0f));
+        snprintf(val, sizeof(val), "%.1f MB", perfWorkingSetMB_);
+        snprintf(detail, sizeof(detail), "peak %.1f MB", perfPeakWorkingSetMB_);
+        DrawStatRow("Working Set", val, detail);
 
-        snprintf(valBuf, sizeof(valBuf), "%.2f ms", frameTimeMs);
-        snprintf(avgBuf, sizeof(avgBuf), "(avg %.2f ms)", perfFrameTimeMsAvg_);
-        DrawStatWithSmallAvg("Frame Time", valBuf, avgBuf);
+        snprintf(val, sizeof(val), "%.1f MB", perfPrivateBytesMB_);
+        DrawStatRow("Private Bytes (Commit)", val);
 
-        snprintf(valBuf, sizeof(valBuf), "%.0f", io.Framerate);
-        DrawStatWithSmallAvg("FPS", valBuf, "");
+        snprintf(val, sizeof(val), "%llu", static_cast<unsigned long long>(perfPageFaultCount_));
+        DrawStatRow("Page Faults", val);
+
+        ImGui::Dummy(ImVec2(0, 6.0f));
+        snprintf(val, sizeof(val), "%u", perfHandleCount_);
+        DrawStatRow("Handles", val);
+
+        snprintf(val, sizeof(val), "%u", perfGdiObjectCount_);
+        DrawStatRow("GDI Objects", val);
+
+        snprintf(val, sizeof(val), "%u", perfUserObjectCount_);
+        DrawStatRow("User Objects", val);
+
+        ImGui::Dummy(ImVec2(0, 6.0f));
+        int upH = static_cast<int>(perfUptimeSeconds_) / 3600;
+        int upM = (static_cast<int>(perfUptimeSeconds_) % 3600) / 60;
+        int upS = static_cast<int>(perfUptimeSeconds_) % 60;
+        snprintf(val, sizeof(val), "%d:%02d:%02d", upH, upM, upS);
+        DrawStatRow("Process Uptime", val);
+
+        snprintf(val, sizeof(val), "%.2f ms", frameTimeMs);
+        snprintf(detail, sizeof(detail), "avg %.2f ms  (%.0f FPS)", perfFrameTimeMsAvg_, io.Framerate);
+        DrawStatRow("Frame Time", val, detail);
+
+        ImGui::Dummy(ImVec2(0, 6.0f));
+        auto sources = mixer_.ListSources();
+        uint64_t totalUnderrunFrames = 0;
+        for (auto& s : sources) totalUnderrunFrames += mixer_.GetUnderrunFrames(s.id);
+        double totalUnderrunMs = static_cast<double>(totalUnderrunFrames) / 48000.0 * 1000.0;
+        snprintf(val, sizeof(val), "%zu", sources.size());
+        DrawStatRow("Active Sources", val);
+        snprintf(val, sizeof(val), "%.0f ms", totalUnderrunMs);
+        DrawStatRow("Total Underrun Time", val);
     }
     ImGui::End();
 }
@@ -1149,33 +1301,74 @@ void Gui::RenderFrame() {
     ImGui::End();
     ImGui::PopStyleVar(2); // WindowRounding, WindowBorderSize -- WindowPadding was already popped above
 
-    // Item 7: small copyright line, its own tiny borderless strip at the
-    // very bottom -- separate window rather than fighting the layout
-    // tree for space, since it's static chrome, not a resizable pane.
+    // Items 3/6/7: footer strip at the very bottom. Previously its own
+    // ImGui window; after a real fix (missing WindowPadding override)
+    // still didn't resolve visibility, rebuilt on the FOREGROUND draw
+    // list instead -- this draws on top of literally every window with
+    // no z-order ambiguity possible (a regular window's stacking order
+    // depends on ImGui's internal focus/creation-order bookkeeping,
+    // which is exactly the kind of thing that's hard to fully reason
+    // about from source alone; the foreground draw list has no such
+    // ambiguity by construction). Click/hover handled manually since
+    // draw-list text isn't a normal "item".
     {
         constexpr float kFooterHeight = 22.0f;
-        ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - kFooterHeight));
-        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, kFooterHeight));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-        ImGui::Begin("##footer", nullptr,
-                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-                      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoInputs);
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        ImFont* font = ImGui::GetFont();
+        float smallSize = ImGui::GetFontSize() * 0.8f; // small font, per feedback
+        ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text, 0.55f); // dim but guaranteed-visible base color
+        ImU32 textColHot = ImGui::GetColorU32(ImGuiCol_Text);      // full brightness on hover
+
+        float footerTop = io.DisplaySize.y - kFooterHeight;
+        float textY = footerTop + (kFooterHeight - smallSize) * 0.5f;
+        bool mouseInFooterRow = io.MousePos.y >= footerTop && io.MousePos.y <= io.DisplaySize.y;
+
+        // Item 7: "Testers" link, left side.
+        const char* testersText = "Testers";
+        ImVec2 testersSize = font->CalcTextSizeA(smallSize, 100000.0f, 0.0f, testersText);
+        ImVec2 testersPos(16.0f, textY);
+        bool testersHover = mouseInFooterRow && io.MousePos.x >= testersPos.x &&
+                             io.MousePos.x <= testersPos.x + testersSize.x;
+        dl->AddText(font, smallSize, testersPos, testersHover ? textColHot : textCol, testersText);
+        if (testersHover) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            float underlineY = testersPos.y + testersSize.y + 1.0f;
+            dl->AddLine(ImVec2(testersPos.x, underlineY), ImVec2(testersPos.x + testersSize.x, underlineY), textColHot);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) showTestersWindow_ = true;
+        }
+
+        // Item 6: copyright text, right-aligned, clickable -> Licenses.
         const char* footerText = "\xC2\xA9 2026 Zerrin Siya. This software is released under the MIT License.";
-        ImGui::SetWindowFontScale(0.8f); // small font, per feedback
-        ImVec2 textSize = ImGui::CalcTextSize(footerText);
-        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) * 0.5f,
-                                    (kFooterHeight - textSize.y) * 0.5f));
-        ImGui::TextDisabled("%s", footerText);
-        ImGui::SetWindowFontScale(1.0f);
-        ImGui::End();
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar(2);
+        ImVec2 footerSize = font->CalcTextSizeA(smallSize, 100000.0f, 0.0f, footerText);
+        ImVec2 footerPos(io.DisplaySize.x - footerSize.x - 16.0f, textY);
+        bool footerHover = mouseInFooterRow && io.MousePos.x >= footerPos.x &&
+                            io.MousePos.x <= footerPos.x + footerSize.x;
+        dl->AddText(font, smallSize, footerPos, footerHover ? textColHot : textCol, footerText);
+        if (footerHover) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            float underlineY = footerPos.y + footerSize.y + 1.0f;
+            dl->AddLine(ImVec2(footerPos.x, underlineY), ImVec2(footerPos.x + footerSize.x, underlineY), textColHot);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) showLicensesWindow_ = true;
+        }
     }
 
+    // Items 6/7/8: the two footer popups. AlwaysAutoResize +
+    // NoSavedSettings, same fix/reasoning as the Performance window's
+    // item 5/8 sizing bug -- content-only placeholders for now.
+    if (showLicensesWindow_) {
+        ImGui::Begin("Licenses", &showLicensesWindow_,
+                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::TextUnformatted("licenses text space");
+        ImGui::End();
+    }
+    if (showTestersWindow_) {
+        ImGui::Begin("Testers", &showTestersWindow_,
+                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::TextUnformatted("Testers text space");
+        ImGui::End();
+    }
+
+    RenderToolsDownloadPrompt(); // item 3
     RenderPerformanceWindow(); // item 8; no-op cost when the panel is closed
 
     ImGui::Render();

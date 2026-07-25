@@ -78,6 +78,26 @@ private:
     LayoutNode* sourcesSplitNode_ = nullptr;
     bool sourcesRatioSettled_ = false;
 
+    // Items 6/7: footer popups. AlwaysAutoResize + NoSavedSettings, same
+    // reasoning as the Performance window's item 5/8 fix.
+    bool showLicensesWindow_ = false;
+    bool showTestersWindow_ = false;
+
+    // Item 3: download-consent prompt state. toolsPromptShown_ ensures
+    // the modal only auto-opens once per session (the first time we
+    // learn tools are actually missing); after that, re-showing it is
+    // only ever user-initiated via the "Download Tools" button in the
+    // Devices panel.
+    void RenderToolsDownloadPrompt();
+    bool toolsPromptShown_ = false;
+    bool showToolsDownloadPrompt_ = false;
+    // Item 1: edge-detected so the on-screen Log panel gets a clear
+    // entry for each step of the tools lifecycle (initial check
+    // finishing, and download finishing) -- WM_LOG_* alone only reaches
+    // the file/console log, not this panel; see PushLogLine.
+    bool loggedInitialToolsCheck_ = false;
+    bool wasDownloadInProgress_ = false;
+
     // Item 8: lightweight performance panel state. Sampling itself is
     // throttled independently of render rate (see RenderPerformanceWindow)
     // so leaving the panel open doesn't add per-frame OS-call overhead --
@@ -91,6 +111,13 @@ private:
     double perfCpuPercentCur_ = 0.0;
     double perfCpuPercentAvg_ = 0.0;
     double perfWorkingSetMB_ = 0.0;
+    double perfPeakWorkingSetMB_ = 0.0;
+    double perfPrivateBytesMB_ = 0.0;
+    uint64_t perfPageFaultCount_ = 0;
+    uint32_t perfHandleCount_ = 0;
+    uint32_t perfGdiObjectCount_ = 0;
+    uint32_t perfUserObjectCount_ = 0;
+    double perfUptimeSeconds_ = 0.0;
     double perfFrameTimeMsAvg_ = 0.0;
 
     std::mutex usbQueueMutex_;
