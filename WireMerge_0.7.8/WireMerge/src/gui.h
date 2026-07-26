@@ -9,6 +9,20 @@
 #include <mutex>
 #include <cstdint>
 
+// Build fix: forward declarations for the Dear ImGui types used in
+// DrawFooterTextClipped's signature below. This header deliberately does
+// NOT #include "imgui.h" (only gui.cpp does) -- pulling the real header in
+// here was never needed before this function existed, and forward-
+// declaring these four types is enough to satisfy the pointer/by-value
+// parameters in a function DECLARATION (the .cpp, which has the real
+// imgui.h, is where these types actually need to be complete). ImU32 must
+// match Dear ImGui's own typedef exactly (unsigned int), not be redeclared
+// as a different type.
+struct ImDrawList;
+struct ImFont;
+struct ImVec2;
+using ImU32 = unsigned int;
+
 // ---------------------------------------------------------------------------
 // gui.h
 //
@@ -96,7 +110,10 @@ private:
     struct FooterOccluderRect { float minX, minY, maxX, maxY; };
     std::vector<FooterOccluderRect> footerOccluderRects_;
     void RegisterFooterOccluder(); // call right after Begin() for a window that might cover the footer
-    bool IsFooterRectOccluded(float minX, float minY, float maxX, float maxY) const;
+    // ISSUE fix (this round): clips footer text around occluders instead
+    // of hiding the whole string on any overlap -- see .cpp for details.
+    void DrawFooterTextClipped(ImDrawList* dl, ImFont* font, float fontSize,
+                                ImVec2 pos, ImVec2 size, ImU32 color, const char* text);
 
     // Item 3: download-consent prompt state. toolsPromptShown_ ensures
     // the modal only auto-opens once per session (the first time we

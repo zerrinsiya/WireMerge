@@ -12,6 +12,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <objbase.h>
 #include <urlmon.h>
 #include <avrt.h>
 #include <sstream>
@@ -174,8 +175,19 @@ void AdbHandler::DownloadToolsAsync() {
 static bool DownloadToFile(const std::string& url, const std::string& destPath) {
     HRESULT hr = URLDownloadToFileA(nullptr, url.c_str(), destPath.c_str(), 0, nullptr);
     if (FAILED(hr)) {
-        WM_LOG_ERROR("AdbHandler: download failed for " + url + " (hr=0x" +
-                      std::to_string(static_cast<unsigned long>(hr)) + ")");
+        // ISSUE fix (this round): std::to_string() on an unsigned long
+        // always formats DECIMAL, not hex -- the log was printing "0x" as
+        // a literal prefix in front of a decimal number, so every logged
+        // hr value was mislabeled and undecodable (e.g. the real
+        // INET_E_INVALID_CERTIFICATE = 0x800C0019 was showing up in logs
+        // as the misleading "hr=0x2148270105", which is that same value's
+        // DECIMAL digits with a false "0x" glued on). Fixed with an
+        // actual hex-formatting snprintf so the logged value is real,
+        // correct hex that matches published HRESULT/urlmon.h error
+        // tables.
+        char hexBuf[16];
+        snprintf(hexBuf, sizeof(hexBuf), "%08lX", static_cast<unsigned long>(hr));
+        WM_LOG_ERROR("AdbHandler: download failed for " + url + " (hr=0x" + hexBuf + ")");
         return false;
     }
     return true;
@@ -265,6 +277,39 @@ static std::string ExtractFirstAssetUrl(const std::string& json, const std::stri
 }
 
 bool AdbHandler::TryAutoDownload(const std::string& toolsDir) {
+    // ISSUE fix (this round): URLDownloadToFileA is COM/OLE-moniker based
+    // under the hood (it binds an async pluggable protocol handler to
+    // fetch the URL), and per Microsoft's own docs that machinery expects
+    // the calling thread to have COM initialized. This function is always
+    // called from a background std::thread (asyncInitThread_ or
+    // downloadThread_) that never calls CoInitializeEx -- neither thread
+    // is the main UI thread, which is the only place this app initializes
+    // anything COM-related (implicitly, via other Win32/DX calls). With
+    // no COM apartment on these threads, URLMON's certificate-validation
+    // callback path can fail even against a perfectly valid HTTPS
+    // endpoint, which is consistent with BOTH dl.google.com AND
+    // api.github.com failing identically and near-instantly with
+    // INET_E_INVALID_CERTIFICATE (0x800C0019) -- two unrelated servers
+    // with unrelated certificate chains failing the exact same way,
+    // immediately, points at something wrong in the local calling
+    // context rather than either server's actual certificate. RAII guard
+    // so every return path below (success or failure) still calls
+    // CoUninitialize() exactly once, matching the one CoInitializeEx()
+    // call, with no risk of missing it on an early return.
+    struct ComGuard {
+        bool initialized = false;
+        ComGuard() {
+            HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+            // S_FALSE means COM was already initialized on this thread
+            // (fine, don't double-uninitialize); RPC_E_CHANGED_MODE means
+            // it's already initialized in the OTHER threading model (rare
+            // here since these are fresh worker threads, but still safe
+            // to just not call Uninitialize in that case either).
+            initialized = (hr == S_OK || hr == S_FALSE);
+        }
+        ~ComGuard() { if (initialized) CoUninitialize(); }
+    } comGuard;
+
     CreateDirectoryA(toolsDir.c_str(), nullptr); // fine if it already exists
 
     bool adbOk = !FindNextToExe("adb.exe").empty();

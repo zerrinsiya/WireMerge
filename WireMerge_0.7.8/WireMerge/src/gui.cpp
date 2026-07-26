@@ -572,7 +572,28 @@ void Gui::RenderOutputContent(const PaneRenderContext& /*ctx*/) {
             bool selected = (d.index == selectedOutputDevice_);
             std::string label = d.name + (d.isDefaultOutput ? " (default)" : "");
             if (ImGui::Selectable(label.c_str(), selected)) {
-                selectedOutputDevice_ = d.index;
+                // ISSUE fix (this round): picking a different device here
+                // used to only update selectedOutputDevice_ -- the actual
+                // PortAudio stream kept running against the OLD device
+                // until the user manually hit Stop then Start again. Fix:
+                // if output is already live, seamlessly close the old
+                // stream and open the new one right here, so switching
+                // takes effect immediately with no manual stop/start
+                // needed. If output wasn't running, this is a no-op extra
+                // check and behaves exactly as before (just remembers the
+                // selection for when Start Output is eventually pressed).
+                if (d.index != selectedOutputDevice_) {
+                    selectedOutputDevice_ = d.index;
+                    if (outputOpen_) {
+                        audio_.CloseOutput();
+                        if (audio_.OpenOutput(mixer_, selectedOutputDevice_)) {
+                            PushLogLine("Output switched to " + d.name + ".");
+                        } else {
+                            outputOpen_ = false;
+                            PushLogLine("Failed to switch output to " + d.name + ". Check log file for details.");
+                        }
+                    }
+                }
             }
         }
         ImGui::EndCombo();
@@ -1064,12 +1085,44 @@ void Gui::RegisterFooterOccluder() {
     footerOccluderRects_.push_back({pos.x, pos.y, pos.x + size.x, pos.y + size.y});
 }
 
-bool Gui::IsFooterRectOccluded(float minX, float minY, float maxX, float maxY) const {
+// ISSUE fix (this round): draws footer text but visually clips out any
+// horizontal span that's covered by a dragged-over window, instead of the
+// previous all-or-nothing IsFooterRectOccluded hide (which made the WHOLE
+// string vanish the instant even one pixel of it was covered). The footer
+// is always a single horizontal strip, so occlusion here only ever needs
+// to be reasoned about along X: for each registered occluder that
+// vertically overlaps this text's row, punch a clip-excluded gap out of
+// the draw by splitting into a "before the gap" and "after the gap" clip
+// rect and drawing the same text (unclipped range, ImGui clips it as an
+// image essentially) into each. Multiple occluders are handled by
+// iteratively shrinking the visible span.
+void Gui::DrawFooterTextClipped(ImDrawList* dl, ImFont* font, float fontSize,
+                                 ImVec2 pos, ImVec2 size, ImU32 color, const char* text) {
+    // Collect the visible sub-spans of [pos.x, pos.x+size.x] after
+    // subtracting every occluder's horizontal range (only occluders that
+    // actually vertically overlap this text's row matter).
+    struct Span { float minX, maxX; };
+    std::vector<Span> visible = {{pos.x, pos.x + size.x}};
     for (auto& r : footerOccluderRects_) {
-        bool separate = maxX < r.minX || minX > r.maxX || maxY < r.minY || minY > r.maxY;
-        if (!separate) return true;
+        bool verticallyOverlaps = !(pos.y + size.y < r.minY || pos.y > r.maxY);
+        if (!verticallyOverlaps) continue;
+        std::vector<Span> next;
+        for (auto& s : visible) {
+            if (r.maxX <= s.minX || r.minX >= s.maxX) {
+                next.push_back(s); // no overlap with this occluder, unaffected
+                continue;
+            }
+            if (r.minX > s.minX) next.push_back({s.minX, std::min(r.minX, s.maxX)});
+            if (r.maxX < s.maxX) next.push_back({std::max(r.maxX, s.minX), s.maxX});
+        }
+        visible = next;
     }
-    return false;
+    for (auto& s : visible) {
+        if (s.maxX <= s.minX) continue;
+        dl->PushClipRect(ImVec2(s.minX, pos.y - 2.0f), ImVec2(s.maxX, pos.y + size.y + 2.0f), true);
+        dl->AddText(font, fontSize, pos, color, text);
+        dl->PopClipRect();
+    }
 }
 
 // Item 4/5 rebuild: the old DrawStatWithSmallAvg used an ABSOLUTE
@@ -1353,16 +1406,20 @@ void Gui::RenderFrame() {
     // real height reduction, not the "shrink the number until centering
     // breaks" mistake from two rounds ago, since the centering formula
     // itself still works correctly at any padding value.
-    float footerSmallSizeProbe = std::max(1.0f, ImGui::GetFontSize() - 1.0f);
-    // ISSUE fix (this round): reported unaffected a second time with
-    // kFooterVPad already at its floor (0.0f) -- the only remaining lever
-    // was kFooterBottomMargin, which I'd flagged as off-limits without
-    // sign-off. Taking "still unaffected" after VPad hit zero as that
-    // sign-off: cutting kFooterBottomMargin down from 6.0f to 2.0f now.
-    constexpr float kFooterVPad = 0.0f;          // padding above/below text, inside the strip -- at floor
-    constexpr float kFooterBottomMargin = 2.0f;  // clearance between strip and screen edge -- reduced this round
-    constexpr float kFooterGlyphBias = 0.5f;     // compensates ascender/descender asymmetry in the font's own metrics
-    const float kFooterHeight = footerSmallSizeProbe + kFooterVPad * 2.0f;
+    // ISSUE fix (this round): REBUILT from scratch per explicit
+    // instruction, after several rounds of shrinking kFooterVPad/
+    // kFooterBottomMargin produced no visible change. Root cause: those
+    // two constants were only ever a few px each, while kFooterHeight's
+    // dominant term was footerSmallSizeProbe (i.e. the font's own line
+    // height, ~13-15px depending on the active font) -- so a 2-4px cut
+    // to the padding terms was genuinely getting swallowed by the much
+    // larger, font-driven term sitting right next to it in the same sum.
+    // Rebuilt with a single hardcoded pixel constant for the ENTIRE strip
+    // height, independent of font metrics, so there's exactly one number
+    // to look at and no compounding terms to lose a change inside.
+    constexpr float kFooterHeight = 16.0f; // total strip height, hardcoded (was font-size-derived)
+    constexpr float kFooterBottomMargin = 2.0f; // clearance between strip and screen edge
+    constexpr float kFooterGlyphBias = 0.0f; // no longer needed at this height; text is centered directly
 
     float contentY = 0.0f;
     RenderToolbar(contentY);
@@ -1552,12 +1609,14 @@ void Gui::RenderFrame() {
     {
         ImDrawList* dl = ImGui::GetForegroundDrawList();
         ImFont* font = ImGui::GetFont();
-        // Item 1/3: same "default font size minus N" convention as the
-        // Performance window's small text -- base -2, plus item 3's
-        // explicit +1 this round, net -1. Previously a scale multiplier
-        // (0.8x) plus an additive +1 stacked across rounds in a way that
-        // drifted unpredictably; this is now one clean absolute formula.
-        float smallSize = std::max(1.0f, ImGui::GetFontSize() - 1.0f);
+        // ISSUE fix (this round): kFooterHeight is now a fixed 16px
+        // constant, independent of font size (see the constant's own
+        // comment above for why). smallSize must be capped to fit inside
+        // that fixed strip with room for real padding on both sides --
+        // otherwise a larger active font could make the text taller than
+        // the strip itself. 12px leaves 2px of breathing room above and
+        // below within the 16px strip.
+        float smallSize = std::min(12.0f, std::max(1.0f, ImGui::GetFontSize() - 1.0f));
         ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text, 0.55f); // dim but guaranteed-visible base color
         ImU32 textColHot = ImGui::GetColorU32(ImGuiCol_Text);      // full brightness on hover
         ImU32 textColInert = ImGui::GetColorU32(ImGuiCol_Text, 0.30f); // item 4: dimmed further while a modal owns input
@@ -1586,36 +1645,40 @@ void Gui::RenderFrame() {
         const char* testersText = "Testers";
         ImVec2 testersSize = font->CalcTextSizeA(smallSize, 100000.0f, 0.0f, testersText);
         ImVec2 testersPos(16.0f, textY);
-        bool testersOccluded = IsFooterRectOccluded(testersPos.x, testersPos.y,
-                                                      testersPos.x + testersSize.x, testersPos.y + testersSize.y);
-        if (!testersOccluded) {
-            bool testersHover = mouseInFooterRow && io.MousePos.x >= testersPos.x &&
-                                 io.MousePos.x <= testersPos.x + testersSize.x;
-            dl->AddText(font, smallSize, testersPos, anyFooterModalOpen ? textColInert : (testersHover ? textColHot : textCol), testersText);
-            if (testersHover) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                float underlineY = testersPos.y + testersSize.y + 1.0f;
-                dl->AddLine(ImVec2(testersPos.x, underlineY), ImVec2(testersPos.x + testersSize.x, underlineY), textColHot);
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) showTestersWindow_ = true;
-            }
+        // ISSUE fix (this round): IsFooterRectOccluded was all-or-nothing --
+        // ANY overlap with a dragged window hid the ENTIRE string, even if
+        // only a few pixels of it were actually covered (exactly the
+        // "disappears at halfway" symptom reported). Real fix: instead of
+        // a binary hide, push a clip rect PER OCCLUDER that excludes just
+        // the covered region, so ImGui only skips drawing the pixels that
+        // are actually behind the other window -- the rest of the string
+        // stays visible and readable.
+        bool testersHover = mouseInFooterRow &&
+                             io.MousePos.x >= testersPos.x && io.MousePos.x <= testersPos.x + testersSize.x;
+        DrawFooterTextClipped(dl, font, smallSize, testersPos, testersSize,
+                               anyFooterModalOpen ? textColInert : (testersHover ? textColHot : textCol),
+                               testersText);
+        if (testersHover) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            float underlineY = testersPos.y + testersSize.y + 1.0f;
+            dl->AddLine(ImVec2(testersPos.x, underlineY), ImVec2(testersPos.x + testersSize.x, underlineY), textColHot);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) showTestersWindow_ = true;
         }
 
         // Item 6: copyright text, right-aligned, clickable -> Licenses.
         const char* footerText = "\xC2\xA9 2026 Zerrin Siya. This software is released under the MIT License.";
         ImVec2 footerSize = font->CalcTextSizeA(smallSize, 100000.0f, 0.0f, footerText);
         ImVec2 footerPos(io.DisplaySize.x - footerSize.x - 16.0f, textY);
-        bool footerOccluded = IsFooterRectOccluded(footerPos.x, footerPos.y,
-                                                     footerPos.x + footerSize.x, footerPos.y + footerSize.y);
-        if (!footerOccluded) {
-            bool footerHover = mouseInFooterRow && io.MousePos.x >= footerPos.x &&
-                                io.MousePos.x <= footerPos.x + footerSize.x;
-            dl->AddText(font, smallSize, footerPos, anyFooterModalOpen ? textColInert : (footerHover ? textColHot : textCol), footerText);
-            if (footerHover) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                float underlineY = footerPos.y + footerSize.y + 1.0f;
-                dl->AddLine(ImVec2(footerPos.x, underlineY), ImVec2(footerPos.x + footerSize.x, underlineY), textColHot);
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) showLicensesWindow_ = true;
-            }
+        bool footerHover = mouseInFooterRow &&
+                            io.MousePos.x >= footerPos.x && io.MousePos.x <= footerPos.x + footerSize.x;
+        DrawFooterTextClipped(dl, font, smallSize, footerPos, footerSize,
+                               anyFooterModalOpen ? textColInert : (footerHover ? textColHot : textCol),
+                               footerText);
+        if (footerHover) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            float underlineY = footerPos.y + footerSize.y + 1.0f;
+            dl->AddLine(ImVec2(footerPos.x, underlineY), ImVec2(footerPos.x + footerSize.x, underlineY), textColHot);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) showLicensesWindow_ = true;
         }
     }
 
