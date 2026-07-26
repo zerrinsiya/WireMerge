@@ -378,6 +378,11 @@ bool Gui::Initialize() {
 void Gui::PushLogLine(const std::string& line) {
     logLines_.push_back(line);
     if (logLines_.size() > 200) logLines_.pop_front();
+    // Item 3 (this round): track total pushes separately from size(), since
+    // size() stops changing once the 200-line cap is being hit steadily --
+    // see totalLogLinesPushed_'s declaration in gui.h for why that broke
+    // auto-scroll detection.
+    ++totalLogLinesPushed_;
 }
 
 void Gui::DrainUsbEventQueue() {
@@ -955,8 +960,12 @@ void Gui::RenderLogContent(const PaneRenderContext& /*ctx*/) {
     // was already at/near the bottom when they arrived -- i.e. auto-follow
     // like a normal terminal/chat log, not a hard pin. If the user has
     // scrolled up to read history, new lines no longer drag them away.
-    size_t lineCount = logLines_.size();
-    bool linesAdded = lineCount != lastSeenLogLineCount_;
+    // Item 3 (this round): compare against totalLogLinesPushed_, not
+    // logLines_.size() -- see gui.h for why size() alone stops detecting
+    // new lines once the 200-line cap is steadily being hit (push+pop keeps
+    // size() constant forever after that point).
+    size_t pushedCount = totalLogLinesPushed_;
+    bool linesAdded = pushedCount != lastSeenLogLineCount_;
 
     for (auto& line : logLines_) {
         ImGui::TextWrapped("%s", line.c_str());
@@ -969,7 +978,7 @@ void Gui::RenderLogContent(const PaneRenderContext& /*ctx*/) {
         if (wasAtBottomLastFrame_) {
             ImGui::SetScrollHereY(1.0f);
         }
-        lastSeenLogLineCount_ = lineCount;
+        lastSeenLogLineCount_ = pushedCount;
     }
 
     // Recompute "at bottom" AFTER this frame's content + any scroll call
@@ -1077,16 +1086,19 @@ bool Gui::IsFooterRectOccluded(float minX, float minY, float maxX, float maxY) c
 static void DrawStatRow(const char* label, const char* valueText, const char* detailText = nullptr) {
     ImGui::Text("%s: %s", label, valueText);
     if (detailText && detailText[0] != '\0') {
-        ImGui::SetWindowFontScale(0.85f); // item 4: bumped from 0.8 for legibility
-        // item 4: full ImGuiCol_Text at reduced alpha instead of
-        // ImGuiCol_TextDisabled -- TextDisabled in this theme reads as
-        // too dim/washed out at the smaller size to read comfortably as
-        // "the avg", which is what "the avg is not proper" meant here.
-        ImVec4 dimmed = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-        dimmed.w *= 0.7f;
-        ImGui::PushStyleColor(ImGuiCol_Text, dimmed);
-        ImGui::Text("%s", detailText);
-        ImGui::PopStyleColor();
+        // Item 1: "2 less than the default font size" -- an absolute
+        // pixel offset, not a relative scale multiplier (0.8x/0.85x
+        // scaling in earlier rounds drifted depending on the base font
+        // size instead of being a fixed, predictable difference).
+        // SetWindowFontScale only takes a multiplier, so the target size
+        // is converted to the equivalent scale factor here.
+        // TODO item 1 (this round): bumped from -2.0f to -1.0f -- "increase
+        // by 1" relative to the previous absolute-offset size, still
+        // smaller than body text and still an absolute px offset (not a
+        // scale multiplier -- see the comment above on why that drifts).
+        float targetSize = std::max(1.0f, ImGui::GetFontSize() - 1.0f);
+        ImGui::SetWindowFontScale(targetSize / ImGui::GetFontSize());
+        ImGui::TextDisabled("%s", detailText); // "still greyed out", per feedback
         ImGui::SetWindowFontScale(1.0f);
     }
 }
@@ -1188,6 +1200,45 @@ void Gui::RenderPerformanceWindow() {
     ImGui::Begin("Performance", &showPerfWindow_,
                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
     RegisterFooterOccluder(); // item 3: this window can cover the footer if dragged over it
+    // Item 1: the app's GLOBAL style.ItemSpacing is (10,10) -- that gap
+    // gets added automatically between EVERY item, including each of the
+    // Dummy() spacers AND each Separator() below. Two Dummy calls plus a
+    // Separator around every divider meant FIVE items in a row each
+    // contributing their own 10px on top of their own small explicit
+    // size -- that compounding, not any single value, is what "horrible,
+    // too much" padding actually was. Fixed at the root with a tighter
+    // local ItemSpacing for this window specifically, plus dropping the
+    // now-redundant Dummy pairs around each Separator entirely.
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 4.0f));
+
+    // TODO item 1 (this round): wrap all stat rows in a bordered child,
+    // same convention as the Log pane's ##log_content (ChildBorderSize is
+    // global at 1.0f, so ImGuiChildFlags_Border alone gives the same subtle
+    // border for free -- no extra styling needed here). WindowPadding is
+    // pushed to (10, 4) for the child specifically: this window's own
+    // AlwaysAutoResize outer Begin() already applies the app's global
+    // 16px WindowPadding around the OUTSIDE of this child, so the (10,4)
+    // here is purely the requested 3-5px-range top/bottom gap between the
+    // border and the first/last stat row, not a second full panel margin.
+    //
+    // ISSUE fix (this round): the previous version passed ImVec2(-1,-1)
+    // (meaning "fill the parent") TOGETHER WITH
+    // ImGuiChildFlags_AutoResizeX/Y (meaning "size myself to my content").
+    // Those two are contradictory -- AutoResize wants an axis size of 0.0f,
+    // not -1.0f -- and combined with the OUTER window already being
+    // AlwaysAutoResize (which sizes itself to ITS content, i.e. this
+    // child), the two auto-resize systems fought each other and both
+    // collapsed to near-zero, which is exactly the "tiny window with a
+    // dot in it" symptom reported. Fix: this child doesn't need to
+    // auto-size itself at all -- the OUTER Begin() already does that job
+    // for the whole window. The child just needs to report a real content
+    // size so the outer AlwaysAutoResize has something correct to measure,
+    // which ImVec2(0, 0) (their combined natural content size, standard
+    // ImGui idiom for "size to fit, no fill") does directly with no
+    // resize flags needed.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 4.0f));
+    ImGui::BeginChild("##perf_content", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Border);
+    ImGui::PopStyleVar(); // WindowPadding (only meant for the child's own Begin)
     {
         char val[64], detail[96];
 
@@ -1195,9 +1246,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(detail, sizeof(detail), "avg %.1f%%", perfCpuPercentAvg_);
         DrawStatRow("CPU Usage", val, detail);
 
-        ImGui::Dummy(ImVec2(0, 2.0f)); // item 4: tightened from 6px
         ImGui::Separator(); // item 4: divider between sections
-        ImGui::Dummy(ImVec2(0, 2.0f));
 
         // Item 5: renamed from raw Win32 terms (Working Set, Private
         // Bytes) to names a non-technical user actually recognizes.
@@ -1211,9 +1260,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(val, sizeof(val), "%llu", static_cast<unsigned long long>(perfPageFaultCount_));
         DrawStatRow("Memory Page Faults", val);
 
-        ImGui::Dummy(ImVec2(0, 2.0f));
         ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 2.0f));
 
         snprintf(val, sizeof(val), "%u", perfHandleCount_);
         DrawStatRow("Handles", val);
@@ -1224,9 +1271,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(val, sizeof(val), "%u", perfUserObjectCount_);
         DrawStatRow("User Objects", val);
 
-        ImGui::Dummy(ImVec2(0, 2.0f));
         ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 2.0f));
 
         int upH = static_cast<int>(perfUptimeSeconds_) / 3600;
         int upM = (static_cast<int>(perfUptimeSeconds_) % 3600) / 60;
@@ -1238,9 +1283,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(detail, sizeof(detail), "avg %.2f ms  (%.0f FPS)", perfFrameTimeMsAvg_, io.Framerate);
         DrawStatRow("Frame Time", val, detail);
 
-        ImGui::Dummy(ImVec2(0, 2.0f));
         ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 2.0f));
 
         auto sources = mixer_.ListSources();
         uint64_t totalUnderrunFrames = 0;
@@ -1251,6 +1294,8 @@ void Gui::RenderPerformanceWindow() {
         snprintf(val, sizeof(val), "%.0f ms", totalUnderrunMs);
         DrawStatRow("Total Underrun Time", val);
     }
+    ImGui::EndChild(); // ##perf_content
+    ImGui::PopStyleVar(); // ItemSpacing
     ImGui::End();
 }
 
@@ -1294,9 +1339,25 @@ void Gui::RenderFrame() {
 
     // Item 1: single shared constant (previously declared separately in
     // two places -- the layout reservation below and the footer draw
-    // further down -- which had to be kept in sync by hand). 30% smaller
-    // than the original 22px, per feedback.
-    constexpr float kFooterHeight = 15.0f;
+    // further down -- which had to be kept in sync by hand).
+    // ISSUE fix (this round, take 2): the previous fix sized the strip to
+    // EXACTLY text height + padding, but the strip's own bottom edge still
+    // sat flush against io.DisplaySize.y (the literal window/screen edge)
+    // -- so "padding" only existed INSIDE the strip, centering the text
+    // within it, while the strip itself had zero clearance from the true
+    // bottom edge. Visually that still reads as "stuck to the bottom"
+    // because the text's actual on-screen bottom margin was whatever's
+    // left after centering, which for a snugly-sized strip rounds to
+    // near-zero. Fixed properly this time: kFooterBottomMargin is real,
+    // dedicated clearance between the text and the physical bottom edge,
+    // separate from and in addition to kFooterVPad (which centers the
+    // text within its own strip). The two are NOT the same thing and
+    // must not be collapsed back into one "shrink this until it looks
+    // right" number -- that's the mistake that caused this bug twice now.
+    float footerSmallSizeProbe = std::max(1.0f, ImGui::GetFontSize() - 1.0f);
+    constexpr float kFooterVPad = 4.0f;          // padding above/below text, inside the strip
+    constexpr float kFooterBottomMargin = 10.0f; // real clearance between strip and screen edge
+    const float kFooterHeight = footerSmallSizeProbe + kFooterVPad * 2.0f;
 
     float contentY = 0.0f;
     RenderToolbar(contentY);
@@ -1332,7 +1393,7 @@ void Gui::RenderFrame() {
         TilingLayout::Render(*layout_,
                               kOuterMargin, contentY + kOuterMargin,
                               io.DisplaySize.x - kOuterMargin * 2.0f,
-                              io.DisplaySize.y - contentY - kOuterMargin * 2.0f - kFooterHeight,
+                              io.DisplaySize.y - contentY - kOuterMargin * 2.0f - kFooterHeight - kFooterBottomMargin,
                               [this](const std::string& paneId, const PaneRenderContext& ctx) {
                                   RenderPane(paneId, ctx);
                               },
@@ -1385,6 +1446,16 @@ void Gui::RenderFrame() {
         ImGui::EndPopup();
     }
 
+    // Item 4: the footer's hover/click handling is hand-rolled (manual
+    // mouse-position checks), which means it never participated in
+    // ImGui's own modal input-blocking -- a real BeginPopupModal blocks
+    // clicks to everything else while open, but nothing here was aware
+    // one might be open. Checking each of our own modals by name and
+    // gating interactivity on it fixes that directly.
+    bool anyFooterModalOpen = ImGui::IsPopupOpen("Licenses", ImGuiPopupFlags_None) ||
+                               ImGui::IsPopupOpen("Testers", ImGuiPopupFlags_None) ||
+                               ImGui::IsPopupOpen("Download Android Capture Tools?", ImGuiPopupFlags_None);
+
     // Items 1/3/6/7: footer strip at the very bottom, drawn LAST (after
     // every floating window above has had a chance to register itself
     // as an occluder) on the foreground draw list -- guaranteed to
@@ -1394,22 +1465,35 @@ void Gui::RenderFrame() {
     {
         ImDrawList* dl = ImGui::GetForegroundDrawList();
         ImFont* font = ImGui::GetFont();
-        // Item 1: bumped by 1px, and note kFooterHeight itself already
-        // shrank 30% (22 -> 15, see the shared constant above).
-        float smallSize = ImGui::GetFontSize() * 0.8f + 1.0f;
+        // Item 1/3: same "default font size minus N" convention as the
+        // Performance window's small text -- base -2, plus item 3's
+        // explicit +1 this round, net -1. Previously a scale multiplier
+        // (0.8x) plus an additive +1 stacked across rounds in a way that
+        // drifted unpredictably; this is now one clean absolute formula.
+        float smallSize = std::max(1.0f, ImGui::GetFontSize() - 1.0f);
         ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text, 0.55f); // dim but guaranteed-visible base color
         ImU32 textColHot = ImGui::GetColorU32(ImGuiCol_Text);      // full brightness on hover
+        ImU32 textColInert = ImGui::GetColorU32(ImGuiCol_Text, 0.30f); // item 4: dimmed further while a modal owns input
 
-        float footerTop = io.DisplaySize.y - kFooterHeight;
-        // Item 1: "padding towards the bottom" -- previously centered
-        // exactly within kFooterHeight, which (now that the strip itself
-        // is smaller) left the text sitting almost flush against the
-        // physical bottom edge of the window. Anchored 4px up from the
-        // very bottom instead of centered, so there's real breathing
-        // room below the text specifically.
-        constexpr float kBottomPad = 4.0f;
-        float textY = io.DisplaySize.y - kBottomPad - smallSize;
-        bool mouseInFooterRow = io.MousePos.y >= footerTop && io.MousePos.y <= io.DisplaySize.y;
+        // ISSUE fix (this round, take 2): the strip itself now sits
+        // kFooterBottomMargin above the physical screen edge, instead of
+        // flush against it -- that's the real "lift it off the bottom"
+        // fix. footerTop/footerBottom both shift up together so the
+        // strip's own height (and the text-centering within it) is
+        // unchanged; only its position moves.
+        float footerBottom = io.DisplaySize.y - kFooterBottomMargin;
+        float footerTop = footerBottom - kFooterHeight;
+        // Item 3: TRUE vertical centering within the strip -- "in the
+        // middle (height-wise)". Previously anchored a fixed 4px up from
+        // the screen's bottom edge, which silently assumed smallSize
+        // would always be smaller than kFooterHeight; once the font grew
+        // across rounds it no longer was, pushing the text above the
+        // strip entirely (exactly the "not padded, not centered" bug
+        // reported here). This formula is symmetric regardless of how
+        // the two values relate.
+        float textY = footerTop + (kFooterHeight - smallSize) * 0.5f;
+        bool mouseInFooterRow = !anyFooterModalOpen &&
+                                 io.MousePos.y >= footerTop && io.MousePos.y <= footerBottom;
 
         // Item 7: "Testers" link, left side.
         const char* testersText = "Testers";
@@ -1420,7 +1504,7 @@ void Gui::RenderFrame() {
         if (!testersOccluded) {
             bool testersHover = mouseInFooterRow && io.MousePos.x >= testersPos.x &&
                                  io.MousePos.x <= testersPos.x + testersSize.x;
-            dl->AddText(font, smallSize, testersPos, testersHover ? textColHot : textCol, testersText);
+            dl->AddText(font, smallSize, testersPos, anyFooterModalOpen ? textColInert : (testersHover ? textColHot : textCol), testersText);
             if (testersHover) {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 float underlineY = testersPos.y + testersSize.y + 1.0f;
@@ -1438,7 +1522,7 @@ void Gui::RenderFrame() {
         if (!footerOccluded) {
             bool footerHover = mouseInFooterRow && io.MousePos.x >= footerPos.x &&
                                 io.MousePos.x <= footerPos.x + footerSize.x;
-            dl->AddText(font, smallSize, footerPos, footerHover ? textColHot : textCol, footerText);
+            dl->AddText(font, smallSize, footerPos, anyFooterModalOpen ? textColInert : (footerHover ? textColHot : textCol), footerText);
             if (footerHover) {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 float underlineY = footerPos.y + footerSize.y + 1.0f;

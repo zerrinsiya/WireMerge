@@ -139,6 +139,14 @@ private:
     std::deque<std::pair<UsbEvent, UsbDeviceInfo>> usbEventQueue_;
 
     std::deque<std::string> logLines_;
+    // Item 3 (this round): must be a monotonically increasing total, NOT
+    // logLines_.size(). The deque is capped at 200 with pop_front() -- once
+    // that cap is hit, one push + one pop leaves size() unchanged, so a
+    // size-based comparison silently stops detecting new lines forever
+    // (this was the actual root cause of "doesn't auto-scroll", not the
+    // already-fixed hard-pin issue). PushLogLine increments this on every
+    // call regardless of trimming.
+    size_t totalLogLinesPushed_ = 0;
     size_t lastSeenLogLineCount_ = 0; // for RenderLogContent's auto-scroll-on-new-lines fix
     bool wasAtBottomLastFrame_ = true; // whether user was scrolled to bottom; gates auto-follow
 };
