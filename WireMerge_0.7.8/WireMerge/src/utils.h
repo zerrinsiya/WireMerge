@@ -17,7 +17,7 @@ namespace wm {
 // Single source of truth for the version string. Update this one line on
 // release; everything else (window title, log startup line, About text)
 // reads from here rather than hardcoding the version separately.
-inline constexpr const char* kWireMergeVersion = "WireMerge_0.7.1";
+inline constexpr const char* kWireMergeVersion = "WireMerge_0.7.8";
 
 enum class LogLevel { Debug, Info, Warn, Error };
 

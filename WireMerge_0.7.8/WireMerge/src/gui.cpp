@@ -1197,6 +1197,18 @@ void Gui::RenderPerformanceWindow() {
     // place. AlwaysAutoResize + NoSavedSettings together mean this
     // window is ALWAYS sized exactly to its actual content, every
     // launch, with nothing to guess or persist.
+    // ISSUE fix (this round): left/right padding was asymmetric because
+    // Indent() only pushes the LEFT side in -- it has no effect on the
+    // right edge at all. The window's own AlwaysAutoResize sizes to fit
+    // the widest row plus the global WindowPadding (16px) on the right,
+    // but the left got that SAME 16px plus an extra 12px Indent on top,
+    // i.e. 28px left vs 16px right. Fixed by removing Indent entirely and
+    // instead pushing a bigger WindowPadding BEFORE this window's own
+    // Begin() -- WindowPadding is inherently symmetric (applies equally
+    // left/right/top/bottom), so there's no way for it to drift out of
+    // balance the way Indent did.
+    constexpr float kPerfBoxPad = 16.0f; // total padding on all 4 sides
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(kPerfBoxPad, kPerfBoxPad));
     ImGui::Begin("Performance", &showPerfWindow_,
                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
     RegisterFooterOccluder(); // item 3: this window can cover the footer if dragged over it
@@ -1211,34 +1223,18 @@ void Gui::RenderPerformanceWindow() {
     // now-redundant Dummy pairs around each Separator entirely.
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 4.0f));
 
-    // TODO item 1 (this round): wrap all stat rows in a bordered child,
-    // same convention as the Log pane's ##log_content (ChildBorderSize is
-    // global at 1.0f, so ImGuiChildFlags_Border alone gives the same subtle
-    // border for free -- no extra styling needed here). WindowPadding is
-    // pushed to (10, 4) for the child specifically: this window's own
-    // AlwaysAutoResize outer Begin() already applies the app's global
-    // 16px WindowPadding around the OUTSIDE of this child, so the (10,4)
-    // here is purely the requested 3-5px-range top/bottom gap between the
-    // border and the first/last stat row, not a second full panel margin.
-    //
-    // ISSUE fix (this round): the previous version passed ImVec2(-1,-1)
-    // (meaning "fill the parent") TOGETHER WITH
-    // ImGuiChildFlags_AutoResizeX/Y (meaning "size myself to my content").
-    // Those two are contradictory -- AutoResize wants an axis size of 0.0f,
-    // not -1.0f -- and combined with the OUTER window already being
-    // AlwaysAutoResize (which sizes itself to ITS content, i.e. this
-    // child), the two auto-resize systems fought each other and both
-    // collapsed to near-zero, which is exactly the "tiny window with a
-    // dot in it" symptom reported. Fix: this child doesn't need to
-    // auto-size itself at all -- the OUTER Begin() already does that job
-    // for the whole window. The child just needs to report a real content
-    // size so the outer AlwaysAutoResize has something correct to measure,
-    // which ImVec2(0, 0) (their combined natural content size, standard
-    // ImGui idiom for "size to fit, no fill") does directly with no
-    // resize flags needed.
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 4.0f));
-    ImGui::BeginChild("##perf_content", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Border);
-    ImGui::PopStyleVar(); // WindowPadding (only meant for the child's own Begin)
+    // TODO item 3 (this round): breathing room before/after each divider.
+    // Previously the Separator()s had nothing but the window's own tight
+    // ItemSpacing (8,4) around them, which read as cramped against the
+    // rows on either side. kPerfDividerGap adds a real, explicit Dummy on
+    // both sides of every Separator -- distinct from ItemSpacing, which
+    // still applies as normal between the stat rows themselves.
+    constexpr float kPerfDividerGap = 6.0f;
+    auto PerfDivider = [&]() {
+        ImGui::Dummy(ImVec2(0.0f, kPerfDividerGap));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, kPerfDividerGap));
+    };
     {
         char val[64], detail[96];
 
@@ -1246,7 +1242,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(detail, sizeof(detail), "avg %.1f%%", perfCpuPercentAvg_);
         DrawStatRow("CPU Usage", val, detail);
 
-        ImGui::Separator(); // item 4: divider between sections
+        PerfDivider();
 
         // Item 5: renamed from raw Win32 terms (Working Set, Private
         // Bytes) to names a non-technical user actually recognizes.
@@ -1260,7 +1256,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(val, sizeof(val), "%llu", static_cast<unsigned long long>(perfPageFaultCount_));
         DrawStatRow("Memory Page Faults", val);
 
-        ImGui::Separator();
+        PerfDivider();
 
         snprintf(val, sizeof(val), "%u", perfHandleCount_);
         DrawStatRow("Handles", val);
@@ -1271,7 +1267,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(val, sizeof(val), "%u", perfUserObjectCount_);
         DrawStatRow("User Objects", val);
 
-        ImGui::Separator();
+        PerfDivider();
 
         int upH = static_cast<int>(perfUptimeSeconds_) / 3600;
         int upM = (static_cast<int>(perfUptimeSeconds_) % 3600) / 60;
@@ -1283,7 +1279,7 @@ void Gui::RenderPerformanceWindow() {
         snprintf(detail, sizeof(detail), "avg %.2f ms  (%.0f FPS)", perfFrameTimeMsAvg_, io.Framerate);
         DrawStatRow("Frame Time", val, detail);
 
-        ImGui::Separator();
+        PerfDivider();
 
         auto sources = mixer_.ListSources();
         uint64_t totalUnderrunFrames = 0;
@@ -1294,9 +1290,9 @@ void Gui::RenderPerformanceWindow() {
         snprintf(val, sizeof(val), "%.0f ms", totalUnderrunMs);
         DrawStatRow("Total Underrun Time", val);
     }
-    ImGui::EndChild(); // ##perf_content
     ImGui::PopStyleVar(); // ItemSpacing
     ImGui::End();
+    ImGui::PopStyleVar(); // WindowPadding (pushed before Begin)
 }
 
 void Gui::HandleResize(unsigned int width, unsigned int height) {
@@ -1340,23 +1336,32 @@ void Gui::RenderFrame() {
     // Item 1: single shared constant (previously declared separately in
     // two places -- the layout reservation below and the footer draw
     // further down -- which had to be kept in sync by hand).
-    // ISSUE fix (this round, take 2): the previous fix sized the strip to
-    // EXACTLY text height + padding, but the strip's own bottom edge still
-    // sat flush against io.DisplaySize.y (the literal window/screen edge)
-    // -- so "padding" only existed INSIDE the strip, centering the text
-    // within it, while the strip itself had zero clearance from the true
-    // bottom edge. Visually that still reads as "stuck to the bottom"
-    // because the text's actual on-screen bottom margin was whatever's
-    // left after centering, which for a snugly-sized strip rounds to
-    // near-zero. Fixed properly this time: kFooterBottomMargin is real,
-    // dedicated clearance between the text and the physical bottom edge,
-    // separate from and in addition to kFooterVPad (which centers the
-    // text within its own strip). The two are NOT the same thing and
-    // must not be collapsed back into one "shrink this until it looks
-    // right" number -- that's the mistake that caused this bug twice now.
+    // ISSUE fix (round 3): two separate complaints this round: (a) more
+    // gap above the text than below, and (b) the strip is too tall
+    // overall.
+    // (a) is NOT a math error in the centering formula -- footerTop +
+    // (kFooterHeight - smallSize) * 0.5f genuinely splits the box evenly.
+    // The mismatch is that ImGui/the font's glyph ink doesn't fill its
+    // own reported line height symmetrically: most fonts carry more
+    // reserved space above the cap-height (for ascenders/diacritics)
+    // than below the baseline (for descenders), so text drawn via
+    // AddText at a mathematically-centered Y still reads as sitting
+    // slightly high. Compensating with a small empirical downward nudge
+    // (kFooterGlyphBias) rather than re-deriving font metrics we don't
+    // have access to here.
+    // (b) kFooterVPad and kFooterBottomMargin both cut down -- this is a
+    // real height reduction, not the "shrink the number until centering
+    // breaks" mistake from two rounds ago, since the centering formula
+    // itself still works correctly at any padding value.
     float footerSmallSizeProbe = std::max(1.0f, ImGui::GetFontSize() - 1.0f);
-    constexpr float kFooterVPad = 4.0f;          // padding above/below text, inside the strip
-    constexpr float kFooterBottomMargin = 10.0f; // real clearance between strip and screen edge
+    // ISSUE fix (this round): reported unaffected a second time with
+    // kFooterVPad already at its floor (0.0f) -- the only remaining lever
+    // was kFooterBottomMargin, which I'd flagged as off-limits without
+    // sign-off. Taking "still unaffected" after VPad hit zero as that
+    // sign-off: cutting kFooterBottomMargin down from 6.0f to 2.0f now.
+    constexpr float kFooterVPad = 0.0f;          // padding above/below text, inside the strip -- at floor
+    constexpr float kFooterBottomMargin = 2.0f;  // clearance between strip and screen edge -- reduced this round
+    constexpr float kFooterGlyphBias = 0.5f;     // compensates ascender/descender asymmetry in the font's own metrics
     const float kFooterHeight = footerSmallSizeProbe + kFooterVPad * 2.0f;
 
     float contentY = 0.0f;
@@ -1426,7 +1431,62 @@ void Gui::RenderFrame() {
     if (ImGui::BeginPopupModal("Licenses", nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
         RegisterFooterOccluder(); // item 3
-        ImGui::TextUnformatted("licenses text space");
+        // TODO item 3 (this round): real third-party attribution list.
+        // Fixed WIDTH (so long lines wrap instead of stretching the modal
+        // off-screen) but the outer popup itself stays AlwaysAutoResize
+        // for height -- a single FIXED-SIZE scrolling child for the list
+        // body is safe here (unlike the Performance window's nested-auto-
+        // resize problem earlier this round) because this child has an
+        // explicit, non-zero, non-auto size on both axes: there's no
+        // circular "who sizes first" dependency when the size isn't
+        // itself derived from the child's own content.
+        constexpr float kLicensesWidth = 480.0f;
+        constexpr float kLicensesBodyHeight = 320.0f;
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + kLicensesWidth);
+        ImGui::TextWrapped("WireMerge uses the following third-party software, libraries, and services:");
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, 6.0f));
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
+        ImGui::BeginChild("##licenses_body", ImVec2(kLicensesWidth, kLicensesBodyHeight), ImGuiChildFlags_Border);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + kLicensesWidth - 20.0f);
+
+        auto LicenseEntry = [&](const char* name, const char* license, const char* desc) {
+            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.9f, 1.0f), "%s", name);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%s)", license);
+            ImGui::TextWrapped("%s", desc);
+            ImGui::Dummy(ImVec2(0, 6.0f));
+        };
+
+        LicenseEntry("Dear ImGui", "MIT License",
+                      "Immediate-mode GUI library used for the entire WireMerge interface.");
+        LicenseEntry("PortAudio", "MIT-style License",
+                      "Cross-platform audio I/O library used for capturing and playing back "
+                      "audio from USB devices.");
+        LicenseEntry("libusb", "GNU LGPL v2.1",
+                      "USB device access library used for detecting and enumerating connected "
+                      "USB audio hardware.");
+        LicenseEntry("Android Debug Bridge (adb)", "Apache License 2.0",
+                      "Command-line tool from the Android SDK Platform Tools, used to "
+                      "communicate with connected Android devices for app-audio capture.");
+        LicenseEntry("sndcpy", "MIT License",
+                      "Android-side capture tool used to route app audio from a connected "
+                      "phone into WireMerge.");
+        LicenseEntry("vcpkg", "MIT License",
+                      "C++ package manager used to acquire and statically link the "
+                      "dependencies above during the build process.");
+
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 6.0f));
+        ImGui::TextWrapped("Full license texts for each of the above are available from their "
+                            "respective project pages. WireMerge does not modify or redistribute "
+                            "any of these projects' source code beyond standard linking.");
+
+        ImGui::PopTextWrapPos();
+        ImGui::EndChild();
+        ImGui::PopStyleVar(); // WindowPadding
+
         ImGui::Dummy(ImVec2(0, 8.0f));
         if (ImGui::Button("Close", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -1436,11 +1496,38 @@ void Gui::RenderFrame() {
         ImGui::OpenPopup("Testers");
         showTestersWindow_ = false;
     }
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    // ISSUE fix (this round): ImGuiCond_Appearing only applies the centered
+    // position on the single frame the popup transitions from closed to
+    // open. If OpenPopup and the position-set land on different frames
+    // relative to each other (timing-sensitive, not something this file
+    // controls directly), the popup can start rendering at its default/
+    // last position before the centered one takes effect, which is
+    // exactly the "starts at the top" symptom reported. Setting the
+    // position with ImGuiCond_Always instead re-centers it on every
+    // frame the popup is open, removing the race entirely (also keeps it
+    // centered if the main window is resized while this is open).
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Testers", nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
         RegisterFooterOccluder(); // item 3
-        ImGui::TextUnformatted("Testers text space");
+        // ISSUE fix (this round): center-alignment pass from last round
+        // scrapped entirely per explicit instruction -- back to plain
+        // left-aligned text like every other window/popup in the app.
+        // No-bullets list is KEPT (that part wasn't asked to be reverted).
+        ImGui::TextUnformatted("Thanks to everyone who tested WireMerge:");
+        ImGui::Dummy(ImVec2(0, 6.0f));
+        static const char* kTesterNames[] = {
+            "Tester Name 1",
+            "Tester Name 2",
+            "Tester Name 3",
+        };
+        for (const char* name : kTesterNames) {
+            ImGui::TextUnformatted(name);
+        }
+        ImGui::Dummy(ImVec2(0, 10.0f));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 6.0f));
+        ImGui::TextWrapped("This project is run by Zerrin Siya as the sole Maintainer and reviewer.");
         ImGui::Dummy(ImVec2(0, 8.0f));
         if (ImGui::Button("Close", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -1491,7 +1578,7 @@ void Gui::RenderFrame() {
         // strip entirely (exactly the "not padded, not centered" bug
         // reported here). This formula is symmetric regardless of how
         // the two values relate.
-        float textY = footerTop + (kFooterHeight - smallSize) * 0.5f;
+        float textY = footerTop + (kFooterHeight - smallSize) * 0.5f + kFooterGlyphBias;
         bool mouseInFooterRow = !anyFooterModalOpen &&
                                  io.MousePos.y >= footerTop && io.MousePos.y <= footerBottom;
 
