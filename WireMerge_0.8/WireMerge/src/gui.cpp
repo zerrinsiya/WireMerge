@@ -264,10 +264,20 @@ void Gui::ApplyTheme() {
 bool Gui::Initialize() {
     g_activeGui = this;
 
+    // v0.8: load the app icon embedded via resources/WireMerge.rc
+    // (IDI_ICON1) so it shows in the titlebar, taskbar, and Alt-Tab.
+    // LoadIconA with the resource's STRING name (not a numeric ID, since
+    // the .rc names it "IDI_ICON1" rather than a plain integer) --
+    // matching the exact name used in the .rc file is required, a
+    // mismatch here fails silently (returns nullptr, window just has no
+    // icon, no error/crash) rather than a build-time error, so this is
+    // easy to get subtly wrong without noticing.
+    HICON appIcon = LoadIconA(GetModuleHandleA(nullptr), "IDI_ICON1");
+
     WNDCLASSEXA wc = {
         sizeof(WNDCLASSEXA), CS_CLASSDC, WndProc, 0L, 0L,
-        GetModuleHandleA(nullptr), nullptr, nullptr, nullptr, nullptr,
-        "WireMergeWindowClass", nullptr
+        GetModuleHandleA(nullptr), appIcon, nullptr, nullptr, nullptr,
+        "WireMergeWindowClass", appIcon
     };
     RegisterClassExA(&wc);
 
@@ -1417,9 +1427,28 @@ void Gui::RenderFrame() {
     // Rebuilt with a single hardcoded pixel constant for the ENTIRE strip
     // height, independent of font metrics, so there's exactly one number
     // to look at and no compounding terms to lose a change inside.
-    constexpr float kFooterHeight = 16.0f; // total strip height, hardcoded (was font-size-derived)
-    constexpr float kFooterBottomMargin = 2.0f; // clearance between strip and screen edge
-    constexpr float kFooterGlyphBias = 0.0f; // no longer needed at this height; text is centered directly
+    // ISSUE fix (this round): rebuilt as a fully self-contained, custom
+    // footer geometry instead of borrowing/mixing with kOuterMargin (the
+    // general 16px layout margin shared by every content pane). That
+    // sharing was the actual root cause of "stuck to the bottom": the gap
+    // between the content panes and the footer text was kOuterMargin
+    // (16px, inherited from general layout spacing) while the gap below
+    // the text down to the screen edge was only kFooterBottomMargin
+    // (2px, a small number I'd been tuning in isolation) -- an ~8:1
+    // mismatch between two gaps that should have been comparable, plus a
+    // literal double-charge of kOuterMargin in the old height formula
+    // (once for the content pane's own top-margin-mirroring "kOuterMargin*2",
+    // once again implicitly for the footer). These three constants now
+    // fully describe the footer on their own, with no coupling to
+    // anything else in the layout:
+    constexpr float kFooterTopGap = 8.0f;    // content panes -> top of footer text
+    constexpr float kFooterTextHeight = 12.0f; // drawn text height
+    constexpr float kFooterBottomGap = 8.0f; // bottom of footer text -> screen edge
+    // Total vertical space the footer claims at the bottom of the window.
+    // Old scheme's equivalent total was kOuterMargin + kFooterHeight +
+    // kFooterBottomMargin = 16 + 16 + 2 = 34px; this is 28px, smaller AND
+    // with the two surrounding gaps now equal instead of ~4x apart.
+    constexpr float kFooterTotalHeight = kFooterTopGap + kFooterTextHeight + kFooterBottomGap;
 
     float contentY = 0.0f;
     RenderToolbar(contentY);
@@ -1452,10 +1481,18 @@ void Gui::RenderFrame() {
 
     if (layout_) {
         constexpr float kOuterMargin = 16.0f; // spec: 16px outer margin on all sides
+        // ISSUE fix (this round): was "kOuterMargin*2 + kFooterHeight +
+        // kFooterBottomMargin" -- the *2 meant kOuterMargin was being
+        // spent BOTH as the content pane's own top margin AND again as
+        // an invisible gap above the footer, which is what made that gap
+        // read as much bigger than the footer's own internal bottom
+        // clearance. Now: ONE kOuterMargin (top, matching left/right),
+        // plus the footer's own fully self-contained kFooterTotalHeight
+        // (which already includes ITS OWN top gap via kFooterTopGap).
         TilingLayout::Render(*layout_,
                               kOuterMargin, contentY + kOuterMargin,
                               io.DisplaySize.x - kOuterMargin * 2.0f,
-                              io.DisplaySize.y - contentY - kOuterMargin * 2.0f - kFooterHeight - kFooterBottomMargin,
+                              io.DisplaySize.y - contentY - kOuterMargin - kFooterTotalHeight,
                               [this](const std::string& paneId, const PaneRenderContext& ctx) {
                                   RenderPane(paneId, ctx);
                               },
@@ -1609,35 +1646,26 @@ void Gui::RenderFrame() {
     {
         ImDrawList* dl = ImGui::GetForegroundDrawList();
         ImFont* font = ImGui::GetFont();
-        // ISSUE fix (this round): kFooterHeight is now a fixed 16px
-        // constant, independent of font size (see the constant's own
-        // comment above for why). smallSize must be capped to fit inside
-        // that fixed strip with room for real padding on both sides --
-        // otherwise a larger active font could make the text taller than
-        // the strip itself. 12px leaves 2px of breathing room above and
-        // below within the 16px strip.
-        float smallSize = std::min(12.0f, std::max(1.0f, ImGui::GetFontSize() - 1.0f));
+        // ISSUE fix (this round): text height is now the same hardcoded
+        // kFooterTextHeight used everywhere else in this custom footer
+        // scheme, not a separately-derived font-based value -- one
+        // number, used consistently for both the reserved layout space
+        // and the actual drawn glyph size.
+        float smallSize = kFooterTextHeight;
         ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text, 0.55f); // dim but guaranteed-visible base color
         ImU32 textColHot = ImGui::GetColorU32(ImGuiCol_Text);      // full brightness on hover
         ImU32 textColInert = ImGui::GetColorU32(ImGuiCol_Text, 0.30f); // item 4: dimmed further while a modal owns input
 
-        // ISSUE fix (this round, take 2): the strip itself now sits
-        // kFooterBottomMargin above the physical screen edge, instead of
-        // flush against it -- that's the real "lift it off the bottom"
-        // fix. footerTop/footerBottom both shift up together so the
-        // strip's own height (and the text-centering within it) is
-        // unchanged; only its position moves.
-        float footerBottom = io.DisplaySize.y - kFooterBottomMargin;
-        float footerTop = footerBottom - kFooterHeight;
-        // Item 3: TRUE vertical centering within the strip -- "in the
-        // middle (height-wise)". Previously anchored a fixed 4px up from
-        // the screen's bottom edge, which silently assumed smallSize
-        // would always be smaller than kFooterHeight; once the font grew
-        // across rounds it no longer was, pushing the text above the
-        // strip entirely (exactly the "not padded, not centered" bug
-        // reported here). This formula is symmetric regardless of how
-        // the two values relate.
-        float textY = footerTop + (kFooterHeight - smallSize) * 0.5f + kFooterGlyphBias;
+        // Custom footer geometry (this round): text sits kFooterBottomGap
+        // above the screen's bottom edge, full stop -- no centering
+        // formula, no strip-within-a-strip, no glyph-ascent compensation
+        // needed, since the text height IS the reserved height (nothing
+        // to center within). The hit-test row spans from kFooterTopGap
+        // above the text down to the screen edge, giving a comfortable
+        // click target across the whole reserved footer band.
+        float textY = io.DisplaySize.y - kFooterBottomGap - kFooterTextHeight;
+        float footerTop = textY - kFooterTopGap;
+        float footerBottom = io.DisplaySize.y;
         bool mouseInFooterRow = !anyFooterModalOpen &&
                                  io.MousePos.y >= footerTop && io.MousePos.y <= footerBottom;
 

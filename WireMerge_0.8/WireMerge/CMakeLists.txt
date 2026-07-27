@@ -8,6 +8,14 @@ if(NOT WIN32)
     message(FATAL_ERROR "WireMerge currently only targets Windows (see project scope).")
 endif()
 
+# v0.8: RC (Windows resource compiler / windres) for the embedded app
+# icon. Enabled here, AFTER the WIN32 check above -- enabling it inside
+# project(...) at the top would make CMake try to detect an RC compiler
+# even on a non-Windows configure attempt, replacing the friendly
+# FATAL_ERROR message above with a confusing "no RC compiler found" error
+# instead.
+enable_language(RC)
+
 # -----------------------------------------------------------------------------
 # Dependencies
 #
@@ -92,11 +100,13 @@ add_executable(WireMerge WIN32
     src/gui.cpp
     src/check_dependencies.cpp
     src/utils.cpp
+    src/resources/WireMerge.rc
     ${IMGUI_SOURCES}
 )
 
 target_include_directories(WireMerge PRIVATE
     src
+    src/resources
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     include/portaudio
