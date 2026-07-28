@@ -1270,6 +1270,26 @@ void Gui::RenderPerformanceWindow() {
     // Begin() -- WindowPadding is inherently symmetric (applies equally
     // left/right/top/bottom), so there's no way for it to drift out of
     // balance the way Indent did.
+    // TODO (this round): spawn towards the right side of the screen
+    // instead of ImGui's default top-left placement. AlwaysAutoResize
+    // means the window's width isn't known yet at this call, so a
+    // right-aligned pivot (1,0) is used instead of computing an x from a
+    // guessed width -- the window's right edge lands at the given x
+    // regardless of how wide it ends up. ImGuiCond_FirstUseEver (not
+    // Always) so a user who drags it elsewhere isn't fought every frame;
+    // combined with NoSavedSettings below, this re-applies once per
+    // process run (nothing persists to imgui.ini), which is what "start
+    // out towards the right" means for a window with no saved position.
+    // 68.0f mirrors RenderToolbar's local toolbarHeight constant (not
+    // shared -- there's no existing shared constant for it in this file)
+    // so the window starts just clear of the toolbar, not flush with it.
+    constexpr float kPerfSpawnMarginX = 20.0f;
+    constexpr float kPerfSpawnMarginY = 20.0f;
+    constexpr float kPerfSpawnToolbarHeight = 68.0f;
+    ImGui::SetNextWindowPos(
+        ImVec2(io.DisplaySize.x - kPerfSpawnMarginX, kPerfSpawnToolbarHeight + kPerfSpawnMarginY),
+        ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
+
     constexpr float kPerfBoxPad = 16.0f; // total padding on all 4 sides
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(kPerfBoxPad, kPerfBoxPad));
     ImGui::Begin("Performance", &showPerfWindow_,
@@ -1611,9 +1631,9 @@ void Gui::RenderFrame() {
         ImGui::TextUnformatted("Thanks to everyone who tested WireMerge:");
         ImGui::Dummy(ImVec2(0, 6.0f));
         static const char* kTesterNames[] = {
-            "Tester Name 1",
-            "Tester Name 2",
-            "Tester Name 3",
+            "hailegna",
+            "urlate",
+            "kldprm",
         };
         for (const char* name : kTesterNames) {
             ImGui::TextUnformatted(name);
