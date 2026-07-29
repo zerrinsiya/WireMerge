@@ -4,180 +4,289 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="google-site-verification" content="Y8jHjuBy2kk6Gm__8WlhJ3MO9PXtgN4uN7pZFW4bTpk" />
-<title>WireMerge</title>
-<meta name="description" content="WireMerge is a Windows audio mixer that merges microphones and Android phone audio into a single output stream.">
+
+<title>WireMerge — Windows Audio Mixer for USB & Android Sources</title>
+<meta name="description" content="WireMerge is a lightweight Windows audio mixer that merges microphones, USB audio sources, and Android phone audio into a single output stream — no DAW required.">
+<link rel="canonical" href="https://zerrinsiya.github.io/WireMerge/">
+
+<!-- Open Graph -->
+<meta property="og:title" content="WireMerge — Windows Audio Mixer for USB & Android Sources">
+<meta property="og:description" content="Merge microphones, USB audio sources, and Android phone audio into one Windows output stream. Lightweight, low resource usage, no DAW needed.">
+<meta property="og:image" content="https://zerrinsiya.github.io/WireMerge/assets/Homescreen_ASSET.png">
+<meta property="og:url" content="https://zerrinsiya.github.io/WireMerge/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="WireMerge">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="WireMerge — Windows Audio Mixer for USB & Android Sources">
+<meta name="twitter:description" content="Merge microphones, USB audio sources, and Android phone audio into one Windows output stream.">
+<meta name="twitter:image" content="https://zerrinsiya.github.io/WireMerge/assets/Homescreen_ASSET.png">
+
+<!-- Structured data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "WireMerge",
+  "operatingSystem": "Windows",
+  "applicationCategory": "MultimediaApplication",
+  "description": "Lightweight Windows utility that merges USB audio sources (phones, TVs, USB sound cards) and Android phone app audio into a single output stream, without needing a full DAW.",
+  "url": "https://zerrinsiya.github.io/WireMerge/",
+  "downloadUrl": "https://github.com/zerrinsiya/WireMerge/releases",
+  "softwareVersion": "0.8.8",
+  "license": "https://github.com/zerrinsiya/WireMerge/blob/main/LICENSE",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+</script>
+
 <style>
-  :root {
-    --bg: #0b0c0e;
-    --bg-alt: #131417;
-    --text: #f2f2f2;
-    --muted: #9a9ea6;
-    --accent: #6ee7ff;
-    --border: #232529;
-  }
-
-  * { box-sizing: border-box; }
-
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }
-
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2.5rem 1.5rem 1.5rem;
-  }
-
-  header .brand {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    font-family: "Cascadia Code", "Consolas", "JetBrains Mono", "Courier New", monospace;
-    font-weight: 700;
-    font-size: 2.5rem;
-    letter-spacing: -0.01em;
-  }
-
-  .brand-logo {
-    width: 64px;
-    height: 64px;
-  }
-
-  main {
-    max-width: 960px;
-    margin: 0 auto;
-    padding: 0 1.5rem;
-  }
-
-  .hero {
-    padding: 2rem 0 4rem;
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1.5rem;
-  }
-
-  .hero h1 {
-    font-size: clamp(2.25rem, 6vw, 3.75rem);
-    line-height: 1.1;
-    letter-spacing: -0.03em;
-    margin: 0;
-    font-weight: 700;
-  }
-
-  .hero .accent {
-    color: var(--accent);
-  }
-
-  .hero p {
-    max-width: 42ch;
-    color: var(--muted);
-    font-size: 1.05rem;
-    line-height: 1.6;
-    margin: 0;
-  }
-
-  .actions {
-    display: flex;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    justify-content: center;
-    margin-top: 0.5rem;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.7rem 1.4rem;
-    border-radius: 8px;
-    font-size: 0.95rem;
-    font-weight: 600;
-    border: 1px solid var(--border);
-  }
-
-  .btn:hover { text-decoration: none; }
-
-  .btn-primary {
-    background: var(--accent);
-    color: #06262c;
-    border-color: var(--accent);
-  }
-
-  .btn-primary:hover { background: #8ceeff; }
-
-  .btn-secondary {
-    background: transparent;
-    color: var(--text);
-  }
-
-  .btn-secondary:hover { background: var(--bg-alt); }
-
-  .screenshot {
-    width: 100%;
-    max-width: 720px;
-    margin-top: 2rem;
-    border-radius: 12px;
-    border: 1px solid var(--border);
-    display: block;
-  }
-
-  footer {
-    border-top: 1px solid var(--border);
-    padding: 2rem 1.5rem 3rem;
-    text-align: center;
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-
-  footer a { color: var(--muted); }
-  footer a:hover { color: var(--text); }
-
-  @media (max-width: 600px) {
-    header .brand { font-size: 1.8rem; }
-    .brand-logo { width: 44px; height: 44px; }
-    .hero { padding: 1.5rem 0 3rem; }
-  }
+:root {
+--bg: #0b0c0e;
+--bg-alt: #131417;
+--text: #f2f2f2;
+--muted: #9a9ea6;
+--accent: #6ee7ff;
+--border: #232529;
+}
+* { box-sizing: border-box; }
+html, body {
+margin: 0;
+padding: 0;
+background: var(--bg);
+color: var(--text);
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header {
+display: flex;
+align-items: center;
+justify-content: center;
+padding: 2.5rem 1.5rem 1.5rem;
+}
+header .brand {
+display: flex;
+align-items: center;
+gap: 1rem;
+font-family: "Cascadia Code", "Consolas", "JetBrains Mono", "Courier New", monospace;
+font-weight: 700;
+font-size: 2.5rem;
+letter-spacing: -0.01em;
+}
+.brand-logo {
+width: 64px;
+height: 64px;
+}
+main {
+max-width: 960px;
+margin: 0 auto;
+padding: 0 1.5rem;
+}
+.hero {
+padding: 2rem 0 3rem;
+text-align: center;
+display: flex;
+flex-direction: column;
+align-items: center;
+gap: 1.5rem;
+}
+.hero h1 {
+font-size: clamp(2.25rem, 6vw, 3.75rem);
+line-height: 1.1;
+letter-spacing: -0.03em;
+margin: 0;
+font-weight: 700;
+}
+.hero .accent {
+color: var(--accent);
+}
+.hero p {
+max-width: 42ch;
+color: var(--muted);
+font-size: 1.05rem;
+line-height: 1.6;
+margin: 0;
+}
+.actions {
+display: flex;
+gap: 0.75rem;
+flex-wrap: wrap;
+justify-content: center;
+margin-top: 0.5rem;
+}
+.btn {
+display: inline-flex;
+align-items: center;
+gap: 0.5rem;
+padding: 0.7rem 1.4rem;
+border-radius: 8px;
+font-size: 0.95rem;
+font-weight: 600;
+border: 1px solid var(--border);
+}
+.btn:hover { text-decoration: none; }
+.btn-primary {
+background: var(--accent);
+color: #06262c;
+border-color: var(--accent);
+}
+.btn-primary:hover { background: #8ceeff; }
+.btn-secondary {
+background: transparent;
+color: var(--text);
+}
+.btn-secondary:hover { background: var(--bg-alt); }
+.screenshot {
+width: 100%;
+max-width: 720px;
+margin-top: 2rem;
+border-radius: 12px;
+border: 1px solid var(--border);
+display: block;
+}
+.features {
+padding: 1rem 0 4rem;
+}
+.features h2 {
+font-size: 1.6rem;
+text-align: center;
+margin-bottom: 2rem;
+}
+.feature-grid {
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+gap: 1.5rem;
+}
+.feature-card {
+background: var(--bg-alt);
+border: 1px solid var(--border);
+border-radius: 12px;
+padding: 1.25rem 1.5rem;
+}
+.feature-card h3 {
+margin: 0 0 0.5rem;
+font-size: 1.05rem;
+color: var(--accent);
+}
+.feature-card p {
+margin: 0;
+color: var(--muted);
+font-size: 0.95rem;
+line-height: 1.5;
+}
+.faq {
+padding: 0 0 4rem;
+}
+.faq h2 {
+font-size: 1.6rem;
+text-align: center;
+margin-bottom: 2rem;
+}
+.faq-item {
+border-bottom: 1px solid var(--border);
+padding: 1.25rem 0;
+}
+.faq-item h3 {
+margin: 0 0 0.5rem;
+font-size: 1.05rem;
+}
+.faq-item p {
+margin: 0;
+color: var(--muted);
+font-size: 0.95rem;
+line-height: 1.6;
+}
+footer {
+border-top: 1px solid var(--border);
+padding: 2rem 1.5rem 3rem;
+text-align: center;
+color: var(--muted);
+font-size: 0.85rem;
+}
+footer a { color: var(--muted); }
+footer a:hover { color: var(--text); }
+@media (max-width: 600px) {
+header .brand { font-size: 1.8rem; }
+.brand-logo { width: 44px; height: 44px; }
+.hero { padding: 1.5rem 0 3rem; }
+}
 </style>
 </head>
 <body>
-
 <header>
-  <div class="brand">
-    <img src="assets/Logo_ASSET.png" alt="WireMerge logo" class="brand-logo">
-    WireMerge
-  </div>
+<div class="brand">
+<img src="assets/Logo_ASSET.png" alt="WireMerge logo" class="brand-logo">
+WireMerge
+</div>
 </header>
 
 <main>
-  <section class="hero">
-    <h1>
-      Mix your audio, <span class="accent">the simple way</span>
-    </h1>
-    <p>
-      WireMerge merges microphones and Android phone audio into a single
-      output stream. Using just USB and ADB.
-    </p>
-    <div class="actions">
-      <a class="btn btn-primary" href="https://github.com/zerrinsiya/WireMerge/releases">Download</a>
-      <a class="btn btn-secondary" href="https://github.com/zerrinsiya/WireMerge">View on GitHub</a>
-    </div>
-    <img class="screenshot" src="assets/Homescreen_ASSET.png" alt="WireMerge application window showing output device, active sources, and Android capture controls">
-  </section>
+<section class="hero">
+<h1>
+Mix your audio, <span class="accent">the simple way</span>
+</h1>
+<p>
+WireMerge is a free, open-source Windows audio mixer that merges microphones,
+USB audio sources, and Android phone audio into a single output stream —
+using just USB and ADB, with no DAW required.
+</p>
+<div class="actions">
+<a class="btn btn-primary" href="https://github.com/zerrinsiya/WireMerge/releases">Download</a>
+<a class="btn btn-secondary" href="https://github.com/zerrinsiya/WireMerge">View on GitHub</a>
+</div>
+<img class="screenshot" src="assets/Homescreen_ASSET.png" alt="WireMerge application window showing output device, active sources, and Android capture controls">
+</section>
+
+<section class="features">
+<h2>Why WireMerge</h2>
+<div class="feature-grid">
+<div class="feature-card">
+<h3>USB audio merging</h3>
+<p>Plug in phones, TVs, or USB sound cards and mix them straight into your PC's output, similar to Bluetooth pairing but over USB.</p>
+</div>
+<div class="feature-card">
+<h3>Android app-audio capture</h3>
+<p>Capture Android app audio (Spotify, YouTube, and more) over ADB using the same technique as scrcpy and sndcpy — no root required.</p>
+</div>
+<div class="feature-card">
+<h3>Lightweight by design</h3>
+<p>Runs on low-end PCs with minimal CPU and memory usage — no full digital audio workstation or heavyweight mixing app needed.</p>
+</div>
+<div class="feature-card">
+<h3>Free and open source</h3>
+<p>WireMerge is fully open source under the MIT license, with source, releases, and documentation available on GitHub.</p>
+</div>
+</div>
+</section>
+
+<section class="faq">
+<h2>Frequently asked questions</h2>
+<div class="faq-item">
+<h3>What is WireMerge?</h3>
+<p>WireMerge is a free Windows utility that merges audio from multiple USB sources — microphones, phones, TVs, or USB sound cards — into one output stream, so you don't need a separate DAW or hardware mixer.</p>
+</div>
+<div class="faq-item">
+<h3>How does WireMerge capture Android phone audio?</h3>
+<p>WireMerge uses ADB (Android Debug Bridge) and Android's Playback Capture API, the same approach used by scrcpy and sndcpy, to stream app audio from an Android 10+ phone over USB.</p>
+</div>
+<div class="faq-item">
+<h3>Is WireMerge free?</h3>
+<p>Yes. WireMerge is free and open source, licensed under MIT, with the full source code available on GitHub.</p>
+</div>
+<div class="faq-item">
+<h3>What are the requirements?</h3>
+<p>WireMerge runs on Windows and uses PortAudio (via WASAPI) for USB audio devices. Android app-audio capture requires Android 10 or newer with USB debugging enabled.</p>
+</div>
+</section>
 </main>
 
 <footer>
-  <p>View the source, releases, and documentation on the <a href="https://github.com/zerrinsiya/WireMerge">GitHub repository</a>.</p>
+<p>View the source, releases, and documentation on the <a href="https://github.com/zerrinsiya/WireMerge">GitHub repository</a>.</p>
 </footer>
-
 </body>
 </html>
