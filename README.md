@@ -60,7 +60,7 @@ vcpkg install portaudio libusb
 
 ## Code signing policy
 
-This app isn't signed yet but is planned to get apply for a certificat from [SignPath.io](https://signpath.io/),
+This app isn't signed yet but is planned to get apply for a certificate from [SignPath.io](https://signpath.io/),
 certificate hopefully to be provided by SignPath Foundation.
 
 ## Testers
