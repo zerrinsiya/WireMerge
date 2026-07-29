@@ -1665,9 +1665,9 @@ void Gui::RenderFrame() {
         ImGui::TextUnformatted("Thanks to everyone who tested WireMerge:");
         ImGui::Dummy(ImVec2(0, 6.0f));
         static const char* kTesterNames[] = {
-            "hailegna",
-            "urlate",
-            "kldprm",
+            "Brook - hailegna (tester) (Logo artist)",
+            "urlate (tester)",
+            "kldprm (tester)",
         };
         for (const char* name : kTesterNames) {
             ImGui::TextUnformatted(name);
