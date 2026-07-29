@@ -119,6 +119,19 @@ private:
     std::unordered_map<SourceId, Source> sources_;
     std::atomic<SourceId> nextId_{1};
     std::atomic<float> masterVolume_{1.0f}; // read from the realtime output callback, so atomic not mutex-guarded
+
+    // Perf round: scratch buffer for the mono-source-into-stereo-output
+    // path in Mix(). Previously a fresh std::vector<float> was heap-
+    // allocated (and freed) on every single call to Mix() for every mono
+    // source -- i.e. every realtime audio callback, for as long as output
+    // ran. Reused here instead, growing only if a callback ever requests
+    // more frames than it currently holds (should happen at most once or
+    // twice, right after Mix() starts being called, then never again).
+    // Safe as a plain non-atomic member because Mix() is only ever
+    // invoked from the single PortAudio output stream callback -- there
+    // is exactly one outputStream_ (see audio_handler.h), and PortAudio
+    // does not call a given stream's callback re-entrantly/concurrently.
+    std::vector<float> monoScratch_;
 };
 
 } // namespace wm

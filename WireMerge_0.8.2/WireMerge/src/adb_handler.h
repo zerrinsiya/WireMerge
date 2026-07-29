@@ -105,6 +105,21 @@ public:
 
     std::vector<AdbDeviceInfo> ListDevices() const;
 
+    // Non-blocking version of ListDevices(): runs the same `adb devices`
+    // call on a background thread instead of blocking the caller.
+    // Profiling confirmed a single ListDevices() call -- spawning
+    // adb.exe and blocking on ReadFile() for its output -- can cost
+    // upwards of 15ms, and RenderDevicesContent was calling it directly
+    // on the render thread (both on its 2s auto-poll and on manual
+    // "Rescan Now" clicks), which is most of a frame's budget on a
+    // render thread with a 60fps floor. Safe to call every frame; a
+    // no-op while a previous scan is still in flight.
+    void RequestDeviceScan();
+
+    // Non-blocking poll: true exactly once when a scan started via
+    // RequestDeviceScan() has finished, with outDevices moved in.
+    bool TryTakeDeviceScanResult(std::vector<AdbDeviceInfo>& outDevices);
+
     // Installs the helper app (if not already installed), grants the
     // capture permission, sets up the forward tunnel, and launches the
     // app -- then starts a background reader thread once connected. This
@@ -181,6 +196,11 @@ private:
 
     void ReaderLoop(Session* session, Mixer* mixer);
 
+    // Background-thread body for RequestDeviceScan() -- just calls the
+    // existing (blocking) ListDevices() off the render thread and hands
+    // the result back through deviceScanResult_.
+    void DeviceScanLoop();
+
     struct PendingStart {
         std::string deviceSerial;
         std::thread thread;
@@ -203,6 +223,18 @@ private:
     // asyncInitThread_, same use-after-free reasoning.
     std::thread downloadThread_;
     std::atomic<bool> downloadInProgress_{false};
+    // Item (perf round): background thread + flags for
+    // RequestDeviceScan()/TryTakeDeviceScanResult(). deviceScanResult_ is
+    // written by DeviceScanLoop() strictly before the release store to
+    // deviceScanResultReady_, and only read after the matching acquire
+    // load in TryTakeDeviceScanResult() observes it -- same
+    // single-writer/single-reader handoff as asyncInitDone_ above, no
+    // mutex needed. Joined in StopAll(), same use-after-free reasoning
+    // as the other background threads on this object.
+    std::thread deviceScanThread_;
+    std::atomic<bool> deviceScanInProgress_{false};
+    std::vector<AdbDeviceInfo> deviceScanResult_;
+    std::atomic<bool> deviceScanResultReady_{false};
     // Tracks whether adb.exe has actually been invoked this session (any
     // RunAdb/FireAndForgetAdb call) -- used at shutdown to skip the
     // kill-server cleanup call entirely when adb was never touched (e.g.

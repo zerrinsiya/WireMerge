@@ -114,6 +114,10 @@ bool AudioHandler::Initialize() {
 }
 
 void AudioHandler::Shutdown() {
+    // Join first, before touching anything else -- a rescan in flight
+    // calls Pa_Terminate()/Pa_Initialize() against this same object, so
+    // it has to finish before Shutdown() does any of its own teardown.
+    if (rescanThread_.joinable()) rescanThread_.join();
     if (!initialized_) return;
     CloseOutput();
     for (auto& h : inputStreams_) {
@@ -121,6 +125,7 @@ void AudioHandler::Shutdown() {
             Pa_StopStream(h.stream);
             Pa_CloseStream(h.stream);
         }
+        delete static_cast<InputCallbackCtx*>(h.callbackCtx); // perf round: same fix as CloseInputSource()
     }
     inputStreams_.clear();
     Pa_Terminate();
@@ -162,6 +167,47 @@ bool AudioHandler::RescanDevices() {
         return false;
     }
     initialized_ = true;
+    return true;
+}
+
+bool AudioHandler::RescanDevicesAsync() {
+    if (!initialized_) return false;
+    if (outputStream_ || !inputStreams_.empty()) {
+        WM_LOG_WARN("Device rescan refused: stop active output/inputs first "
+                     "(a rescan tears down and reinitializes PortAudio, which "
+                     "would force-close any open streams).");
+        return false;
+    }
+    bool expected = false;
+    if (!rescanInProgress_.compare_exchange_strong(expected, true)) {
+        return false; // a rescan is already running
+    }
+    // Only reached once rescanInProgress_ just flipped false -> true, so
+    // any previous thread has already signaled done and this join is
+    // immediate, not a stall.
+    if (rescanThread_.joinable()) rescanThread_.join();
+    rescanThread_ = std::thread(&AudioHandler::RescanDevicesBlocking, this);
+    return true;
+}
+
+void AudioHandler::RescanDevicesBlocking() {
+    Pa_Terminate();
+    initialized_ = false;
+    PaError err = Pa_Initialize();
+    bool ok = (err == paNoError);
+    if (!ok) {
+        WM_LOG_ERROR(std::string("Device rescan failed to reinitialize PortAudio: ") + Pa_GetErrorText(err));
+    }
+    initialized_ = ok;
+    rescanResult_ = ok;
+    rescanResultReady_.store(true, std::memory_order_release);
+    rescanInProgress_.store(false, std::memory_order_release);
+}
+
+bool AudioHandler::TryTakeRescanResult(bool& outSuccess) {
+    if (!rescanResultReady_.load(std::memory_order_acquire)) return false;
+    outSuccess = rescanResult_;
+    rescanResultReady_.store(false, std::memory_order_release);
     return true;
 }
 
@@ -277,8 +323,10 @@ SourceId AudioHandler::OpenInputSource(Mixer& mixer, int deviceIndex,
     SourceId sourceId = mixer.AddSource(devInfo->name ? devInfo->name : "USB Input",
                                          sampleRate, channels);
 
-    // ctx must outlive the stream; leaked deliberately for stream lifetime
-    // and freed in CloseInputSource via the stream's owning struct below.
+    // ctx must outlive the stream; owning struct (InputStreamHandle) below
+    // holds it now so CloseInputSource()/Shutdown() can actually free it
+    // (perf round: this comment used to say it was freed there, but the
+    // code never did -- a real per-source-removal leak).
     auto* ctx = new InputCallbackCtx{&mixer, sourceId};
 
     PaWasapiStreamInfo wasapiInfo = MakeWasapiAutoConvertInfo();
@@ -329,7 +377,7 @@ SourceId AudioHandler::OpenInputSource(Mixer& mixer, int deviceIndex,
         return 0;
     }
 
-    inputStreams_.push_back({stream, sourceId});
+    inputStreams_.push_back({stream, sourceId, ctx});
     WM_LOG_INFO("Opened input source '" + std::string(devInfo->name) +
                 "' as source id " + std::to_string(sourceId));
     return sourceId;
@@ -342,6 +390,10 @@ void AudioHandler::CloseInputSource(SourceId id) {
                 Pa_StopStream(it->stream);
                 Pa_CloseStream(it->stream);
             }
+            // Perf round: fixes the leak noted above -- freed only after
+            // Pa_CloseStream() returns, which guarantees the callback
+            // thread is done touching ctx before this runs.
+            delete static_cast<InputCallbackCtx*>(it->callbackCtx);
             inputStreams_.erase(it);
             break;
         }
@@ -358,6 +410,14 @@ bool AudioHandler::OpenOutput(Mixer& mixer, int deviceIndex, int channels, int s
     if (channels <= 0) channels = 2;
 
     auto* ctx = new OutputCallbackCtx{&mixer, channels};
+    // Perf round: tracked so CloseOutput() can free ctx once the stream
+    // is actually closed -- it was being new'd here on every successful
+    // open but never freed anywhere, a real leak on every Stop Output
+    // (and on the auto-close/reopen that happens when switching output
+    // devices while live, see gui.cpp). Cleared again below on every
+    // failure path so a later CloseOutput() call never double-frees or
+    // touches a stale pointer from a failed open attempt.
+    outputCallbackCtx_ = ctx;
 
     PaWasapiStreamInfo wasapiInfo = MakeWasapiAutoConvertInfo();
     PaStreamParameters outParams{};
@@ -388,6 +448,7 @@ bool AudioHandler::OpenOutput(Mixer& mixer, int deviceIndex, int channels, int s
     if (err != paNoError) {
         WM_LOG_ERROR(std::string("Failed to open output stream: ") + Pa_GetErrorText(err));
         delete ctx;
+        outputCallbackCtx_ = nullptr;
         return false;
     }
 
@@ -397,6 +458,7 @@ bool AudioHandler::OpenOutput(Mixer& mixer, int deviceIndex, int channels, int s
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
         delete ctx;
+        outputCallbackCtx_ = nullptr;
         return false;
     }
 
@@ -410,6 +472,11 @@ void AudioHandler::CloseOutput() {
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
     }
+    // Perf round: fixes the leak noted in OpenOutput() -- freed only
+    // after Pa_CloseStream() returns, which guarantees the callback
+    // thread is done touching ctx before this runs.
+    delete static_cast<OutputCallbackCtx*>(outputCallbackCtx_);
+    outputCallbackCtx_ = nullptr;
 }
 
 } // namespace wm

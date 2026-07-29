@@ -612,7 +612,7 @@ void Gui::RenderOutputContent(const PaneRenderContext& /*ctx*/) {
     ImGui::Dummy(ImVec2(0, 8.0f)); // item 3: cut 50% from prior 16px, per feedback
 
     // Buttons on one row, 12px gap, NOT stretched to fill width.
-    ImGui::BeginDisabled(selectedOutputDevice_ < 0 || outputOpen_);
+    ImGui::BeginDisabled(selectedOutputDevice_ < 0 || outputOpen_ || audio_.IsRescanInProgress());
     if (ImGui::Button("Start Output")) {
         if (audio_.OpenOutput(mixer_, selectedOutputDevice_)) {
             outputOpen_ = true;
@@ -684,6 +684,20 @@ void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
             cachedInputs = audio_.ListInputDevices();
             lastInputListRefresh = nowMs;
         }
+        // ISSUE (perf round): pick up a background RescanDevicesAsync()
+        // result here, if one just finished -- mirrors the ADB scan
+        // pickup in RenderDevicesContent below.
+        bool rescanSucceeded = false;
+        if (audio_.TryTakeRescanResult(rescanSucceeded)) {
+            if (rescanSucceeded) {
+                cachedInputs = audio_.ListInputDevices(); // immediate refresh, not waiting for the timer
+                lastInputListRefresh = nowMs;
+                PushLogLine("Regulated input devices rescanned.");
+            } else {
+                PushLogLine("Rescan failed to reinitialize PortAudio. Check log file.");
+            }
+        }
+
         auto& inputs = cachedInputs;
         std::string inPreview = "Choose input...";
         for (auto& d : inputs) if (d.index == selectedInput) inPreview = d.name;
@@ -706,7 +720,7 @@ void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
 
         ImGui::Dummy(ImVec2(0, 4.2f)); // item 7: cut 30% from prior 6px, per feedback
 
-        ImGui::BeginDisabled(selectedInput < 0);
+        ImGui::BeginDisabled(selectedInput < 0 || audio_.IsRescanInProgress());
         if (ImGui::Button("Add Source")) {
             SourceId id = audio_.OpenInputSource(mixer_, selectedInput);
             if (id != 0) {
@@ -720,15 +734,23 @@ void Gui::RenderInputsContent(const PaneRenderContext& /*ctx*/) {
         ImGui::EndDisabled();
 
         ImGui::SameLine();
+        ImGui::BeginDisabled(audio_.IsRescanInProgress());
         if (ImGui::Button("Rescan Devices")) {
-            if (audio_.RescanDevices()) {
-                cachedInputs = audio_.ListInputDevices(); // immediate refresh, not waiting for the timer
-                lastInputListRefresh = nowMs;
-                PushLogLine("Regulated input devices rescanned.");
-            } else {
+            // ISSUE (perf round): RescanDevices() -- a full
+            // Pa_Terminate()/Pa_Initialize() reinit -- used to run right
+            // here, synchronously, on the render thread. RescanDevicesAsync()
+            // does the same work on a background thread instead; success/
+            // failure is picked up above via TryTakeRescanResult() once
+            // it's actually done, not on this same frame.
+            if (!audio_.RescanDevicesAsync()) {
                 PushLogLine("Rescan needs Output and all Sources stopped first "
                             "(rescanning reinitializes PortAudio).");
             }
+        }
+        ImGui::EndDisabled();
+        if (audio_.IsRescanInProgress()) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("Rescanning...");
         }
 
         pcContentHeight = ImGui::GetCursorPosY(); // measured for next frame's expandedHeight
@@ -796,8 +818,20 @@ void Gui::RenderDevicesContent(const PaneRenderContext& /*ctx*/) {
 
         double now = ImGui::GetTime() * 1000.0;
         if (now - lastScanTime >= kRescanIntervalMs) {
-            cachedDevices = adb_.ListDevices();
+            // ISSUE (perf round): this used to call adb_.ListDevices()
+            // directly here -- a blocking `adb devices` subprocess
+            // spawn + pipe read that profiling measured at up to ~15ms,
+            // on the render thread, every 2 seconds, for the entire
+            // time this panel is expanded (which is the default state).
+            // RequestDeviceScan() kicks the same work off on a
+            // background thread instead; the result is picked up below,
+            // whenever it's actually ready, without blocking this frame.
+            adb_.RequestDeviceScan();
             lastScanTime = now;
+        }
+        std::vector<AdbDeviceInfo> scannedDevices;
+        if (adb_.TryTakeDeviceScanResult(scannedDevices)) {
+            cachedDevices = std::move(scannedDevices);
         }
 
         // Item 7: Rescan Now should read as visually secondary/smaller
@@ -809,9 +843,9 @@ void Gui::RenderDevicesContent(const PaneRenderContext& /*ctx*/) {
             ImVec2 mainPad = ImGui::GetStyle().FramePadding;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(mainPad.x * 0.7f, mainPad.y * 0.7f));
             if (ImGui::Button("Rescan Now")) {
-                cachedDevices = adb_.ListDevices();
+                adb_.RequestDeviceScan();
                 lastScanTime = now;
-                PushLogLine("Android devices rescanned.");
+                PushLogLine("Android device rescan started.");
             }
             ImGui::PopStyleVar();
         }

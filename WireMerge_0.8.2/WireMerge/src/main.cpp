@@ -1,4 +1,6 @@
 #include <windows.h>
+#include <chrono>
+#include <cstdio>
 #include "utils.h"
 #include "check_dependencies.h"
 #include "audio_handler.h"
@@ -27,6 +29,26 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     wm::Logger::Instance().SetLogFile("WireMerge.log");
     WM_LOG_INFO(std::string("WireMerge starting up. Version: ") + wm::kWireMergeVersion);
 
+    // Perf round: cheap boot-stage timeline, logged only (no behavior
+    // change) -- this profiling round's data showed no per-frame CPU
+    // hotspot in steady state, but couldn't isolate startup latency
+    // specifically. AudioHandler::Initialize() below (Pa_Initialize(),
+    // full multi-host-API device enumeration) runs synchronously, before
+    // the window exists, in the exact same spot the already-fixed
+    // AdbHandler "startup takes 5 seconds" bug used to live -- but
+    // whether it's actually worth the same async treatment depends on
+    // how long it really takes on real hardware, not a guess. This
+    // timeline answers that on the next run without needing an external
+    // profiler attached.
+    using Clock = std::chrono::steady_clock;
+    const auto bootStart = Clock::now();
+    auto LogBootStage = [&](const char* label) {
+        double ms = std::chrono::duration<double, std::milli>(Clock::now() - bootStart).count();
+        char buf[96];
+        snprintf(buf, sizeof(buf), "[boot] %s: %.1fms since process start", label, ms);
+        WM_LOG_INFO(buf);
+    };
+
     // Modest process priority boost. Deliberately ABOVE_NORMAL, not
     // HIGH_PRIORITY_CLASS: HIGH would make WireMerge preempt essentially
     // everything else on a low-end, few-core machine -- exactly the
@@ -49,6 +71,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
         WM_LOG_INFO("User chose to exit due to missing dependencies.");
         return 1;
     }
+    LogBootStage("CheckDependencies done");
 
     wm::AudioHandler audio;
     if (!audio.Initialize()) {
@@ -59,6 +82,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     }
     WM_LOG_INFO("PortAudio ready.");
     wm::UiLog::Instance().Push("Audio engine ready.");
+    LogBootStage("AudioHandler::Initialize (Pa_Initialize) done");
 
     wm::UsbHandler usb;
     bool usbReady = usb.Initialize();
@@ -71,6 +95,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
     } else {
         WM_LOG_INFO("libusb ready.");
     }
+    LogBootStage("UsbHandler::Initialize (libusb_init) done");
 
     wm::Mixer mixer;
 
@@ -112,6 +137,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/,
         usb.Shutdown();
         return 1;
     }
+    LogBootStage("Gui::Initialize (window created) done");
 
     gui.Run();
 

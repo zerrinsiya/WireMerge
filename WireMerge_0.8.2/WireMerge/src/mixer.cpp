@@ -147,13 +147,16 @@ void Mixer::Mix(float* out, size_t frames, int outChannels) {
         if (s.info.channels == outChannels) {
             s.ring->MixInto(out, frames, s.info.volume);
         } else if (s.info.channels == 1 && outChannels == 2) {
-            // Mono source into stereo output: mix into a temp mono buffer,
-            // then duplicate to both channels.
-            std::vector<float> mono(frames, 0.0f);
-            s.ring->MixInto(mono.data(), frames, s.info.volume);
+            // Mono source into stereo output: mix into a reused scratch
+            // buffer (see monoScratch_ in mixer.h for why this is safe
+            // without a lock), then duplicate to both channels. Grows at
+            // most a couple of times total, then never allocates again.
+            if (monoScratch_.size() < frames) monoScratch_.resize(frames);
+            std::fill(monoScratch_.begin(), monoScratch_.begin() + frames, 0.0f);
+            s.ring->MixInto(monoScratch_.data(), frames, s.info.volume);
             for (size_t f = 0; f < frames; ++f) {
-                out[f * 2 + 0] += mono[f];
-                out[f * 2 + 1] += mono[f];
+                out[f * 2 + 0] += monoScratch_[f];
+                out[f * 2 + 1] += monoScratch_[f];
             }
         }
         // Other channel-count combinations are uncommon for USB audio

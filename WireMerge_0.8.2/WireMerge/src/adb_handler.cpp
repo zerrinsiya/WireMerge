@@ -500,6 +500,32 @@ std::vector<AdbDeviceInfo> AdbHandler::ListDevices() const {
     return devices;
 }
 
+void AdbHandler::RequestDeviceScan() {
+    bool expected = false;
+    if (!deviceScanInProgress_.compare_exchange_strong(expected, true)) {
+        return; // a scan is already running -- no-op, matches the doc comment
+    }
+    // Only reached once deviceScanInProgress_ just flipped false -> true,
+    // so any previous thread has already signaled done and this join is
+    // immediate, not a stall.
+    if (deviceScanThread_.joinable()) deviceScanThread_.join();
+    deviceScanThread_ = std::thread(&AdbHandler::DeviceScanLoop, this);
+}
+
+void AdbHandler::DeviceScanLoop() {
+    auto result = ListDevices(); // same blocking call as before, now off the render thread
+    deviceScanResult_ = std::move(result);
+    deviceScanResultReady_.store(true, std::memory_order_release);
+    deviceScanInProgress_.store(false, std::memory_order_release);
+}
+
+bool AdbHandler::TryTakeDeviceScanResult(std::vector<AdbDeviceInfo>& outDevices) {
+    if (!deviceScanResultReady_.load(std::memory_order_acquire)) return false;
+    outDevices = std::move(deviceScanResult_);
+    deviceScanResultReady_.store(false, std::memory_order_release);
+    return true;
+}
+
 SourceId AdbHandler::StartCaptureBlocking(Mixer& mixer, const std::string& deviceSerial, int localPort) {
     if (!IsAvailable()) {
         WM_LOG_ERROR("AdbHandler::StartCapture called but adb/sndcpy.apk not available.");
@@ -811,6 +837,7 @@ void AdbHandler::StopAll() {
     // pendingStarts_ below.
     if (asyncInitThread_.joinable()) asyncInitThread_.join();
     if (downloadThread_.joinable()) downloadThread_.join();
+    if (deviceScanThread_.joinable()) deviceScanThread_.join();
 
     // Join in-flight async starts FIRST -- they capture Mixer& by
     // reference and call StartCaptureBlocking (which calls mixer.AddSource
