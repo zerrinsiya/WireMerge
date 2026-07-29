@@ -1,13 +1,183 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="google-site-verification" content="Y8jHjuBy2kk6Gm__8WlhJ3MO9PXtgN4uN7pZFW4bTpk" />
-    <title>WireMerge</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="google-site-verification" content="Y8jHjuBy2kk6Gm__8WlhJ3MO9PXtgN4uN7pZFW4bTpk" />
+<title>WireMerge</title>
+<meta name="description" content="WireMerge is a Windows audio mixer that merges microphones and Android phone audio into a single output stream.">
+<style>
+  :root {
+    --bg: #0b0c0e;
+    --bg-alt: #131417;
+    --text: #f2f2f2;
+    --muted: #9a9ea6;
+    --accent: #6ee7ff;
+    --border: #232529;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2.5rem 1.5rem 1.5rem;
+  }
+
+  header .brand {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-family: "Cascadia Code", "Consolas", "JetBrains Mono", "Courier New", monospace;
+    font-weight: 700;
+    font-size: 2.5rem;
+    letter-spacing: -0.01em;
+  }
+
+  .brand-logo {
+    width: 64px;
+    height: 64px;
+  }
+
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+  }
+
+  .hero {
+    padding: 2rem 0 4rem;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .hero h1 {
+    font-size: clamp(2.25rem, 6vw, 3.75rem);
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    margin: 0;
+    font-weight: 700;
+  }
+
+  .hero .accent {
+    color: var(--accent);
+  }
+
+  .hero p {
+    max-width: 42ch;
+    color: var(--muted);
+    font-size: 1.05rem;
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 0.5rem;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.7rem 1.4rem;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    border: 1px solid var(--border);
+  }
+
+  .btn:hover { text-decoration: none; }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #06262c;
+    border-color: var(--accent);
+  }
+
+  .btn-primary:hover { background: #8ceeff; }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--text);
+  }
+
+  .btn-secondary:hover { background: var(--bg-alt); }
+
+  .screenshot {
+    width: 100%;
+    max-width: 720px;
+    margin-top: 2rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    display: block;
+  }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 2rem 1.5rem 3rem;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  footer a { color: var(--muted); }
+  footer a:hover { color: var(--text); }
+
+  @media (max-width: 600px) {
+    header .brand { font-size: 1.8rem; }
+    .brand-logo { width: 44px; height: 44px; }
+    .hero { padding: 1.5rem 0 3rem; }
+  }
+</style>
 </head>
 <body>
-    <h1>GOOGLE</h1>
-    <p>This is a verification. </p>
-    <p>View the source files and documentation directly in the <a href="https://github.com/zerrinsiya/WireMerge">GitHub Code Repository</a>.</p>
+
+<header>
+  <div class="brand">
+    <img src="assets/Logo_ASSET.png" alt="WireMerge logo" class="brand-logo">
+    WireMerge
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>
+      Mix your audio, <span class="accent">the simple way</span>
+    </h1>
+    <p>
+      WireMerge merges microphones and Android phone audio into a single
+      output stream. No root, no aux cable, just USB and ADB.
+    </p>
+    <div class="actions">
+      <a class="btn btn-primary" href="https://github.com/zerrinsiya/WireMerge/releases">Download</a>
+      <a class="btn btn-secondary" href="https://github.com/zerrinsiya/WireMerge">View on GitHub</a>
+    </div>
+    <img class="screenshot" src="assets/Homescreen_ASSET.png" alt="WireMerge application window showing output device, active sources, and Android capture controls">
+  </section>
+</main>
+
+<footer>
+  <p>View the source, releases, and documentation on the <a href="https://github.com/zerrinsiya/WireMerge">GitHub repository</a>.</p>
+</footer>
+
 </body>
 </html>
