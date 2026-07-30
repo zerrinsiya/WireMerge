@@ -50,10 +50,6 @@ void Logger::Log(LogLevel level, const std::string& msg) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
 static std::string Trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
     if (a == std::string::npos) return "";
@@ -116,10 +112,6 @@ void Config::Set(const std::string& key, int value) { values_[key] = std::to_str
 void Config::Set(const std::string& key, float value) { values_[key] = std::to_string(value); }
 void Config::Set(const std::string& key, bool value) { values_[key] = value ? "1" : "0"; }
 
-// ---------------------------------------------------------------------------
-// UiLog
-// ---------------------------------------------------------------------------
-
 UiLog& UiLog::Instance() {
     static UiLog instance;
     return instance;
@@ -137,4 +129,4 @@ std::vector<std::string> UiLog::DrainAll() {
     return result;
 }
 
-} // namespace wm
+}

@@ -11,50 +11,21 @@
 
 namespace wm {
 
-// ---------------------------------------------------------------------------
-// MMCSS registration (Multimedia Class Scheduler Service)
-//
-// Root cause of "audio stutters when WireMerge loses focus and something
-// else opens a window": MMCSS's scheduling explicitly factors in whether a
-// thread belongs to the foreground application (see Microsoft's own docs
-// on MMCSS scheduling categories). PortAudio's callback threads here were
-// running as plain, unregistered threads -- so when WireMerge lost focus,
-// they had no protection against being starved by a burst of CPU activity
-// from whatever became the new foreground app, on a low-end CPU with few
-// cores to absorb that. This is a genuine, well-documented Windows
-// mechanism, not a vague "priority issue" -- registering with MMCSS's
-// "Pro Audio" task is the standard, correct fix used by real audio/DAW
-// software for exactly this symptom.
-//
-// PortAudio doesn't expose a hook for "stream thread just started," so
-// registration happens lazily on each callback thread's first invocation,
-// gated by a thread_local flag (each PortAudio stream's callback runs
-// consistently on one thread for the stream's lifetime, so this only
-// actually calls into MMCSS once per thread, not once per buffer).
-// ---------------------------------------------------------------------------
 static thread_local bool s_mmcssAttempted = false;
 
 static void EnsureMmcssRegistered() {
     if (s_mmcssAttempted) return;
-    s_mmcssAttempted = true; // set first -- avoid retrying every single callback if this fails once
+    s_mmcssAttempted = true;
 
     DWORD taskIndex = 0;
     HANDLE h = AvSetMmThreadCharacteristicsA("Pro Audio", &taskIndex);
     if (!h) {
-        // Non-fatal: audio still works, just without the scheduling
-        // protection -- log once per thread rather than spamming.
         WM_LOG_WARN("AudioHandler: AvSetMmThreadCharacteristics(\"Pro Audio\") failed "
                      "(GetLastError=" + std::to_string(GetLastError()) + "). Audio will "
                      "still work but may be more prone to stutter under background CPU load.");
     }
-    // Intentionally not reverted: PortAudio owns this thread's lifecycle
-    // and we don't get a callback for "stream is closing" on this same
-    // thread to revert from; Windows releases the MMCSS registration
-    // automatically when the thread itself terminates.
 }
 
-// Context passed into the input callback so it knows which mixer source
-// to push samples into. Owned for the lifetime of the stream.
 struct InputCallbackCtx {
     Mixer* mixer;
     SourceId sourceId;
@@ -114,9 +85,6 @@ bool AudioHandler::Initialize() {
 }
 
 void AudioHandler::Shutdown() {
-    // Join first, before touching anything else -- a rescan in flight
-    // calls Pa_Terminate()/Pa_Initialize() against this same object, so
-    // it has to finish before Shutdown() does any of its own teardown.
     if (rescanThread_.joinable()) rescanThread_.join();
     if (!initialized_) return;
     CloseOutput();
@@ -125,32 +93,13 @@ void AudioHandler::Shutdown() {
             Pa_StopStream(h.stream);
             Pa_CloseStream(h.stream);
         }
-        delete static_cast<InputCallbackCtx*>(h.callbackCtx); // perf round: same fix as CloseInputSource()
+        delete static_cast<InputCallbackCtx*>(h.callbackCtx);
     }
     inputStreams_.clear();
     Pa_Terminate();
     initialized_ = false;
 }
 
-// ---------------------------------------------------------------------------
-// Root cause of "Rescan Devices does nothing until I restart the app":
-// PortAudio takes a ONE-TIME snapshot of the system's device list inside
-// Pa_Initialize() and never re-queries the OS after that on its own --
-// ListInputDevices/ListOutputDevices above were always reading that same
-// stale snapshot, every single frame, no matter how often they were
-// called. There was never a caching bug on our side to fix; the "Rescan"
-// button simply had nothing behind it that actually rescanned anything.
-//
-// Pa_UpdateAvailableDeviceList() would have been the ideal fix (refreshes
-// without touching open streams), but it isn't present in the PortAudio
-// build vcpkg actually installed here -- confirmed by a real link/compile
-// failure, not a guess this time. The only rescan mechanism guaranteed to
-// exist on every PortAudio v19 build is the original one: tear the whole
-// subsystem down and bring it back up. Pa_Terminate() also force-closes
-// every open stream, though, which would silently kill live audio if we
-// did this while anything was running -- so this refuses to rescan (and
-// says why, on-screen, not just in the log file) unless everything is
-// already stopped first.
 bool AudioHandler::RescanDevices() {
     if (!initialized_) return false;
     if (outputStream_ || !inputStreams_.empty()) {
@@ -180,11 +129,8 @@ bool AudioHandler::RescanDevicesAsync() {
     }
     bool expected = false;
     if (!rescanInProgress_.compare_exchange_strong(expected, true)) {
-        return false; // a rescan is already running
+        return false;
     }
-    // Only reached once rescanInProgress_ just flipped false -> true, so
-    // any previous thread has already signaled done and this join is
-    // immediate, not a stall.
     if (rescanThread_.joinable()) rescanThread_.join();
     rescanThread_ = std::thread(&AudioHandler::RescanDevicesBlocking, this);
     return true;
@@ -211,30 +157,6 @@ bool AudioHandler::TryTakeRescanResult(bool& outSuccess) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Host API filtering (WASAPI-only)
-//
-// Root cause of the "dropdown text is cut off" bug: PortAudio enumerates
-// the SAME physical device once per Windows host API that exposes it
-// (MME, DirectSound, WASAPI, WDM-KS all show up as separate entries).
-// Windows' legacy MME API (waveInGetDevCaps / waveOutGetDevCaps) has a
-// documented, OS-level, unfixable-on-our-side limit: device names are
-// capped at MAXPNAMELEN, 32 characters INCLUDING the null terminator --
-// i.e. exactly 31 visible characters, cut off mid-word with no ellipsis.
-// This isn't a buffer bug in WireMerge; there is no "more" name to
-// recover from an MME device handle. That's exactly why the same device
-// name showed up both truncated (the MME entry) AND complete (the
-// WASAPI/DirectSound entry) in the same dropdown.
-//
-// Fix: only surface WASAPI devices. This is also the right call for this
-// app specifically -- WASAPI is lower-latency than MME/DirectSound,
-// which is the whole point of the MMCSS "Pro Audio" registration above.
-// Falls back to showing everything if, for some reason, a system has no
-// WASAPI host API at all (defensive; shouldn't happen on any Windows
-// version this app targets).
-// See the comment above ListInputDevices/ListOutputDevices for why this
-// filter exists. Returns a negative value (paHostApiNotFound) if this
-// system somehow has no WASAPI host API at all.
 static PaHostApiIndex FindWasapiHostApiIndex() {
     return Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
 }
@@ -283,24 +205,6 @@ std::vector<AudioDeviceInfo> AudioHandler::ListOutputDevices() const {
     return devices;
 }
 
-// ---------------------------------------------------------------------------
-// Regression fix: "Invalid sample rate" on devices that worked before the
-// WASAPI-only filtering change.
-//
-// MME/DirectSound (now filtered out of the device lists) always went
-// through Windows' shared audio engine resampler transparently, so a
-// hardcoded 48000Hz request worked on literally any device regardless of
-// its native rate. PortAudio's WASAPI backend does NOT do that by
-// default -- it validates the requested rate against the device's own
-// supported formats up front and rejects a mismatch outright, which is
-// exactly the "Invalid sample rate" error. This is a direct, traceable
-// side effect of filtering to WASAPI-only, not an unrelated bug.
-//
-// Fix: PaWasapiStreamInfo's paWinWasapiAutoConvert flag tells PortAudio's
-// WASAPI backend to do the same conversion MME/DirectSound did for free,
-// restoring the old tolerant behavior while keeping the WASAPI-only
-// device list (so the truncated-name/duplicate-entry fix from two
-// rounds ago stays intact).
 static PaWasapiStreamInfo MakeWasapiAutoConvertInfo() {
     PaWasapiStreamInfo info{};
     info.size = sizeof(PaWasapiStreamInfo);
@@ -323,10 +227,6 @@ SourceId AudioHandler::OpenInputSource(Mixer& mixer, int deviceIndex,
     SourceId sourceId = mixer.AddSource(devInfo->name ? devInfo->name : "USB Input",
                                          sampleRate, channels);
 
-    // ctx must outlive the stream; owning struct (InputStreamHandle) below
-    // holds it now so CloseInputSource()/Shutdown() can actually free it
-    // (perf round: this comment used to say it was freed there, but the
-    // code never did -- a real per-source-removal leak).
     auto* ctx = new InputCallbackCtx{&mixer, sourceId};
 
     PaWasapiStreamInfo wasapiInfo = MakeWasapiAutoConvertInfo();
@@ -342,13 +242,6 @@ SourceId AudioHandler::OpenInputSource(Mixer& mixer, int deviceIndex,
                                  paFramesPerBufferUnspecified, paNoFlag,
                                  InputCallback, ctx);
     if (err != paNoError) {
-        // Belt-and-suspenders: AutoConvert should handle this, but if a
-        // particular driver still refuses, retry once at the device's OWN
-        // native rate rather than failing outright. Note this source will
-        // then be running at a different rate than the rest of the mix --
-        // Mixer doesn't resample between sources, so it may sound
-        // pitch/speed-shifted relative to other sources. Getting *some*
-        // audio with a clear warning beats a silent hard failure.
         WM_LOG_WARN(std::string("Input stream open failed at ") + std::to_string(sampleRate) +
                     "Hz (" + Pa_GetErrorText(err) + "), retrying at device's native " +
                     std::to_string(static_cast<int>(devInfo->defaultSampleRate)) + "Hz...");
@@ -390,9 +283,6 @@ void AudioHandler::CloseInputSource(SourceId id) {
                 Pa_StopStream(it->stream);
                 Pa_CloseStream(it->stream);
             }
-            // Perf round: fixes the leak noted above -- freed only after
-            // Pa_CloseStream() returns, which guarantees the callback
-            // thread is done touching ctx before this runs.
             delete static_cast<InputCallbackCtx*>(it->callbackCtx);
             inputStreams_.erase(it);
             break;
@@ -410,13 +300,6 @@ bool AudioHandler::OpenOutput(Mixer& mixer, int deviceIndex, int channels, int s
     if (channels <= 0) channels = 2;
 
     auto* ctx = new OutputCallbackCtx{&mixer, channels};
-    // Perf round: tracked so CloseOutput() can free ctx once the stream
-    // is actually closed -- it was being new'd here on every successful
-    // open but never freed anywhere, a real leak on every Stop Output
-    // (and on the auto-close/reopen that happens when switching output
-    // devices while live, see gui.cpp). Cleared again below on every
-    // failure path so a later CloseOutput() call never double-frees or
-    // touches a stale pointer from a failed open attempt.
     outputCallbackCtx_ = ctx;
 
     PaWasapiStreamInfo wasapiInfo = MakeWasapiAutoConvertInfo();
@@ -431,8 +314,6 @@ bool AudioHandler::OpenOutput(Mixer& mixer, int deviceIndex, int channels, int s
                                  paFramesPerBufferUnspecified, paNoFlag,
                                  OutputCallback, ctx);
     if (err != paNoError) {
-        // Same AutoConvert-first-then-native-rate-fallback as
-        // OpenInputSource above, for the same reason.
         WM_LOG_WARN(std::string("Output stream open failed at ") + std::to_string(sampleRate) +
                     "Hz (" + Pa_GetErrorText(err) + "), retrying at device's native " +
                     std::to_string(static_cast<int>(devInfo->defaultSampleRate)) + "Hz...");
@@ -472,11 +353,8 @@ void AudioHandler::CloseOutput() {
         Pa_CloseStream(outputStream_);
         outputStream_ = nullptr;
     }
-    // Perf round: fixes the leak noted in OpenOutput() -- freed only
-    // after Pa_CloseStream() returns, which guarantees the callback
-    // thread is done touching ctx before this runs.
     delete static_cast<OutputCallbackCtx*>(outputCallbackCtx_);
     outputCallbackCtx_ = nullptr;
 }
 
-} // namespace wm
+}

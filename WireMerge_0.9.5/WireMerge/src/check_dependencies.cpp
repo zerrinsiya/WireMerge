@@ -6,11 +6,6 @@
 namespace wm {
 
 #ifndef WM_STATIC_BUILD
-// Tries to load a DLL by name using the normal Windows search order
-// (application directory, system directories, then PATH). This mirrors
-// what will actually happen when the real app tries to use PortAudio/
-// libusb, so it's a faithful check rather than a guess. Only relevant for
-// dynamically-linked builds -- see WM_STATIC_BUILD handling below.
 static bool TryFindDll(const std::string& dllName, std::string& outPath) {
     HMODULE mod = LoadLibraryA(dllName.c_str());
     if (!mod) return false;
@@ -28,18 +23,11 @@ std::vector<DependencyStatus> CheckDependencies() {
     std::vector<DependencyStatus> results;
 
 #ifdef WM_STATIC_BUILD
-    // Statically linked build: PortAudio and libusb are compiled directly
-    // into WireMerge.exe (see CMakeLists.txt / x64-mingw-static triplet),
-    // so there is no separate DLL to hunt for on disk -- that's the whole
-    // point of a static build. Report both as trivially present rather
-    // than running a check that would always produce a false positive.
     results.push_back({"PortAudio", true, "Statically linked into WireMerge.exe"});
     results.push_back({"libusb", true, "Statically linked into WireMerge.exe"});
     return results;
 #else
-    // Common DLL names depending on how PortAudio was built.
     const char* portaudioCandidates[] = {"portaudio.dll", "portaudio_x64.dll", "libportaudio-2.dll"};
-    // libusb-1.0.dll is the standard name across MinGW/MSVC builds.
     const char* libusbCandidates[] = {"libusb-1.0.dll"};
 
     {
@@ -111,4 +99,4 @@ bool ReportDependencyStatus(const std::vector<DependencyStatus>& statuses) {
     return result == IDYES;
 }
 
-} // namespace wm
+}

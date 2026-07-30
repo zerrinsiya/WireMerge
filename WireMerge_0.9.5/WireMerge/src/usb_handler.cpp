@@ -5,9 +5,6 @@
 
 namespace wm {
 
-// USB Audio Class = interface class 0x01. We check top-level device class
-// (rare, most composite devices report 0x00 at device level and declare
-// class per-interface) and fall back to a per-interface scan.
 static bool DeviceLooksLikeAudioClass(libusb_device* dev) {
     libusb_device_descriptor desc{};
     if (libusb_get_device_descriptor(dev, &desc) != 0) return false;
@@ -39,9 +36,6 @@ static UsbDeviceInfo DescribeDevice(libusb_device* dev, libusb_device_handle* ha
     info.productId = desc.idProduct;
     info.looksLikeAudioClass = DeviceLooksLikeAudioClass(dev);
 
-    // String descriptors require an open handle; opening every device just
-    // to read its name can fail (permissions/driver claims it), so we treat
-    // failures as "leave name blank" rather than an error.
     bool openedHere = false;
     libusb_device_handle* handle = handleOpt;
     if (!handle) {
@@ -126,12 +120,8 @@ static int LIBUSB_CALL HotplugCallbackThunk(libusb_context* /*ctx*/, libusb_devi
                             ? UsbEvent::Connected
                             : UsbEvent::Disconnected;
 
-    // Note: this thunk runs on the libusb event thread, not the GUI thread.
-    // gui.cpp's callback implementation is responsible for marshaling this
-    // onto the UI thread (e.g. pushing to a thread-safe queue drained once
-    // per frame) rather than touching ImGui state directly from here.
     self->HandleHotplugEvent(wmEvent, info);
-    return 0; // 0 = keep listening for further events on this registration
+    return 0; //keep listening
 }
 
 void UsbHandler::HandleHotplugEvent(UsbEvent event, const UsbDeviceInfo& info) {
@@ -183,10 +173,10 @@ void UsbHandler::StopHotplugMonitor() {
 }
 
 void UsbHandler::EventLoop() {
-    struct timeval tv{0, 100000}; // 100ms poll, keeps shutdown responsive
+    struct timeval tv{0, 100000}; //100ms poll
     while (running_) {
         libusb_handle_events_timeout_completed(static_cast<libusb_context*>(usbContext_), &tv, nullptr);
     }
 }
 
-} // namespace wm
+}

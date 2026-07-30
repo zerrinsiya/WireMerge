@@ -5,13 +5,10 @@
 
 namespace wm {
 
-// Minimum fraction of a split either child is allowed to shrink to --
-// without this, dragging a splitter to an extreme could collapse a pane
-// to zero/negative size.
 static constexpr float kMinRatio = 0.12f;
 static constexpr float kMaxRatio = 0.88f;
-static constexpr float kPaneGap = 16.0f; // gap between adjacent panes -- unrelated to splitter thickness, left unchanged
-static constexpr float kSplitterThickness = 10.0f; // the splitter's own hitbox/highlight thickness -- thinner than the gap, centered within it
+static constexpr float kPaneGap = 16.0f;
+static constexpr float kSplitterThickness = 10.0f;
 
 PaneRenderContext DrawSubtlePanelFrame(const std::string& label, float x, float y,
                                         float width, float height, float margin) {
@@ -19,15 +16,9 @@ PaneRenderContext DrawSubtlePanelFrame(const std::string& label, float x, float 
     ImVec2 p0(x, y);
     ImVec2 p1(x + width, y + height);
 
-    // Subtle background + border -- slightly lighter than the app
-    // background (ChildBg) with a thin, muted border (Border), giving the
-    // "its own small window" look without being visually loud.
     drawList->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_ChildBg), 4.0f);
     drawList->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), 4.0f, 0, 1.0f);
 
-    // Title: scaled up slightly (15/13 ratio, per feedback -- "just
-    // enough to differentiate") so it visibly reads as a title rather
-    // than blending in with body text.
     constexpr float kTitleFontScale = 15.0f / 13.0f;
     ImGui::SetCursorScreenPos(ImVec2(x + margin, y + margin));
     ImGui::SetWindowFontScale(kTitleFontScale);
@@ -35,28 +26,10 @@ PaneRenderContext DrawSubtlePanelFrame(const std::string& label, float x, float 
     float labelHeight = ImGui::GetTextLineHeight();
     ImGui::SetWindowFontScale(1.0f);
 
-    // Divider line beneath the title -- the "# creates a title divider,
-    // like markdown" ask. Full margin's worth of gap between the title
-    // text and the divider (previously only a fraction of the margin,
-    // which read as cramped).
     float dividerY = y + margin + labelHeight + margin;
     drawList->AddLine(ImVec2(x + margin, dividerY), ImVec2(x + width - margin, dividerY),
                        ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
 
-    // Inner content rect: full margin's worth of gap after the divider
-    // too (previously half), matching the same spacing used everywhere
-    // else around this pane.
-    //
-    // Item 6 fix: floor is 1.0f, NOT 0.0f. ImGui's BeginChild treats a
-    // size of EXACTLY 0.0f as a special sentinel meaning "auto-fill the
-    // remaining space in the parent window" (same convention as Begin()
-    // auto-sizing) -- it does NOT mean "zero-size, clip everything".
-    // When a pane got shrunk small enough via the splitter that this
-    // computation hit 0.0f exactly, the content child would silently
-    // balloon to fill the ENTIRE root window instead of collapsing with
-    // it, which is exactly "contents clip out of the borders" on a
-    // minimized pane: the tiny drawn border stayed tiny, but the actual
-    // interactive/rendered child behind it was full-size.
     float contentY = dividerY + margin;
     PaneRenderContext inner{
         x + margin,
@@ -68,10 +41,6 @@ PaneRenderContext DrawSubtlePanelFrame(const std::string& label, float x, float 
 }
 
 LayoutNodePtr TilingLayout::BuildDefaultLayout() {
-    // Reverted per feedback: Inputs is one pane again, containing both the
-    // "Regulated Inputs to PC" and "Devices (Android)" subsections (the
-    // brief 3-separate-panes structure from the v0.6.2 spec attempt was
-    // explicitly taken back). Left ~47%, right ~53%.
     auto output = std::make_unique<LayoutNode>();
     output->isLeaf = true;
     output->paneId = "output";
@@ -83,7 +52,7 @@ LayoutNodePtr TilingLayout::BuildDefaultLayout() {
     auto leftColumn = std::make_unique<LayoutNode>();
     leftColumn->isLeaf = false;
     leftColumn->orientation = SplitOrientation::Vertical;
-    leftColumn->ratio = 0.50f; // 50/50 split, per feedback
+    leftColumn->ratio = 0.50f;
     leftColumn->first = std::move(output);
     leftColumn->second = std::move(log);
 
@@ -98,7 +67,7 @@ LayoutNodePtr TilingLayout::BuildDefaultLayout() {
     auto rightColumn = std::make_unique<LayoutNode>();
     rightColumn->isLeaf = false;
     rightColumn->orientation = SplitOrientation::Vertical;
-    rightColumn->ratio = 0.37f; // 37/63 split, per feedback
+    rightColumn->ratio = 0.37f;
     rightColumn->first = std::move(sources);
     rightColumn->second = std::move(inputs);
 
@@ -140,15 +109,11 @@ void TilingLayout::RenderNode(LayoutNode& node, float x, float y, float width, f
         ImGui::PushID(node.paneId.c_str());
 
         std::string headerLabel = displayNameFn(node.paneId);
-        constexpr float kPanelMargin = 14.0f; // item 5: more padding around pane titles, per feedback
+        constexpr float kPanelMargin = 14.0f;
         PaneRenderContext inner = DrawSubtlePanelFrame(headerLabel, x, y, width, height, kPanelMargin);
 
         ImGui::SetCursorScreenPos(ImVec2(inner.x, inner.y));
         std::string childId = std::string("##content_") + node.paneId;
-        // No border on the child itself -- DrawSubtlePanelFrame already
-        // drew the ONE border for this pane. A second border here is
-        // exactly what produced the "box inside a box" look reported
-        // earlier.
         if (ImGui::BeginChild(childId.c_str(), ImVec2(inner.width, inner.height),
                                ImGuiChildFlags_None)) {
             renderFn(node.paneId, inner);
@@ -159,13 +124,11 @@ void TilingLayout::RenderNode(LayoutNode& node, float x, float y, float width, f
         return;
     }
 
-    // --- Split node: divide the rect, render both children, draw a
-    // draggable divider between them ---
     bool horizontal = (node.orientation == SplitOrientation::Horizontal);
     float totalLength = horizontal ? width : height;
     float firstLength = std::max(0.0f, totalLength * node.ratio - kPaneGap * 0.5f);
     float secondLength = std::max(0.0f, totalLength - firstLength - kPaneGap);
-    float splitterInset = (kPaneGap - kSplitterThickness) * 0.5f; // centers the thinner hitbox within the gap
+    float splitterInset = (kPaneGap - kSplitterThickness) * 0.5f;
 
     float firstX = x, firstY = y, firstW = width, firstH = height;
     float secondX = x, secondY = y, secondW = width, secondH = height;
@@ -191,8 +154,7 @@ void TilingLayout::RenderNode(LayoutNode& node, float x, float y, float width, f
 
     RenderNode(*node.first, firstX, firstY, firstW, firstH, renderFn, displayNameFn);
 
-    // --- Splitter drag handle ---
-    ImGui::PushID(&node); // split nodes have no paneId, so identity is the node's address
+    ImGui::PushID(&node);
     ImGui::SetCursorScreenPos(ImVec2(splitterX, splitterY));
     ImGui::InvisibleButton("##splitter", ImVec2(splitterW, splitterH));
 
@@ -207,39 +169,26 @@ void TilingLayout::RenderNode(LayoutNode& node, float x, float y, float width, f
         }
     }
 
-    // Item 3: greyed-out by default (not fully invisible), fading up to
-    // the full accent color on hover/drag, and fading back down when the
-    // mouse leaves -- instead of the old hard on/off. splitterAlpha is
-    // eased toward a target each frame and persists on the node so the
-    // fade is smooth across frames rather than snapping.
     {
         bool hoveredOrActive = ImGui::IsItemHovered() || ImGui::IsItemActive();
         float target = hoveredOrActive ? 1.0f : 0.0f;
         float dt = ImGui::GetIO().DeltaTime;
-        constexpr float kFadeSpeed = 9.0f; // full fade over ~110ms
+        constexpr float kFadeSpeed = 9.0f;
         if (node.splitterAlpha < target) {
             node.splitterAlpha = std::min(target, node.splitterAlpha + kFadeSpeed * dt);
         } else if (node.splitterAlpha > target) {
             node.splitterAlpha = std::max(target, node.splitterAlpha - kFadeSpeed * dt);
         }
 
-        // Only skip the draw call once fully faded out -- avoids a wasted
-        // draw call at rest without reintroducing the old hard pop-in.
         if (node.splitterAlpha > 0.001f) {
             ImDrawList* drawList = ImGui::GetWindowDrawList();
-            ImVec4 restCol = ImGui::GetStyleColorVec4(ImGuiCol_Border); // subtle grey baseline
+            ImVec4 restCol = ImGui::GetStyleColorVec4(ImGuiCol_Border);
             ImVec4 hotCol = ImGui::GetStyleColorVec4(ImGui::IsItemActive() ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
-            // Plain manual lerp -- ImLerp() lives in imgui_internal.h, which
-            // this file deliberately doesn't include (this is public-API-
-            // only code); a hand-written lerp has zero dependency risk.
             float t = node.splitterAlpha;
             ImVec4 blended(restCol.x + (hotCol.x - restCol.x) * t,
                             restCol.y + (hotCol.y - restCol.y) * t,
                             restCol.z + (hotCol.z - restCol.z) * t,
                             restCol.w + (hotCol.w - restCol.w) * t);
-            // Baseline alpha stays low ("greyed out") even at full rest
-            // opacity of the lerp target; only visible at all once
-            // splitterAlpha has risen above ~0, per "fade in on hover".
             constexpr float kRestAlpha = 0.25f;
             blended.w = kRestAlpha + (hotCol.w - kRestAlpha) * t;
             ImU32 col = ImGui::GetColorU32(blended);
@@ -248,14 +197,8 @@ void TilingLayout::RenderNode(LayoutNode& node, float x, float y, float width, f
             float totalThickness = horizontal ? splitterW : splitterH;
             float thicknessInset = (totalThickness - visibleThickness) * 0.5f;
 
-            // Shorten the highlight along its LENGTH too -- previously it
-            // spanned the entire pane boundary (splitterH for a horizontal
-            // splitter, splitterW for a vertical one), which read as "very
-            // basic"/a full divider line. Now a short segment centered along
-            // that boundary, capped so it never exceeds the actual available
-            // length on very small panes.
             float boundaryLength = horizontal ? splitterH : splitterW;
-            float visibleLength = std::min(128.0f, boundaryLength); // doubled from 64px, per feedback
+            float visibleLength = std::min(128.0f, boundaryLength);
             float lengthInset = (boundaryLength - visibleLength) * 0.5f;
 
             ImVec2 hiMin, hiMax;
@@ -274,4 +217,4 @@ void TilingLayout::RenderNode(LayoutNode& node, float x, float y, float width, f
     RenderNode(*node.second, secondX, secondY, secondW, secondH, renderFn, displayNameFn);
 }
 
-} // namespace wm
+}
