@@ -64,7 +64,7 @@ This app isn't signed yet but is planned to get apply for a certificate from [Si
 certificate hopefully to be provided by SignPath Foundation.
 
 ## Testers
-Thanks to everyone who tested WirMerge:
+Thanks to everyone who tested WireMerge:
 - Brook - hailegna (tester) (Logo artist)
 - urlate (tester)
 - kldprm (tester)
