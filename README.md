@@ -58,10 +58,28 @@ vcpkg install portaudio libusb
 | `src/gui` | Dear ImGui interface |
 | `src/layout` | Window and panel layout |
 
-## Code signing policy
+## A note on distribution
 
-This app isn't signed yet but is planned to get apply for a certificate from [SignPath.io](https://signpath.io/),
-certificate hopefully to be provided by SignPath Foundation.
+Before getting into the specifics below: the goal here is to be fully upfront
+with you about how WireMerge is currently distributed and why, rather than
+leave anyone guessing.
+
+WireMerge is not code-signed. Signing through [SignPath.io](https://signpath.io/)
+was the plan, but it could not be completed due to insufficient funds on the
+maintainer's end. As a result, some antivirus tools and Windows SmartScreen
+may flag the regular build.
+
+Because of this, WireMerge is distributed as two downloads from the
+[Releases page](https://github.com/zerrinsiya/WireMerge/releases):
+
+| Build | Description |
+| --- | --- |
+| `WireMerge` | The regular build, includes everything, including a feature that automatically downloads the small Android capture tools (adb.exe, sndcpy.apk) if they're missing. |
+| `WireMerge-Stripped` | Same app, same features. The only difference is that it does not download those tools automatically; you place them in a `tools` folder yourself. This is the build most likely to avoid antivirus/SmartScreen flags, since the automatic download is what appears to trigger most of them. |
+
+Both builds are fully functional. If you'd rather not have WireMerge reach
+out to the internet on its own for anything, or your antivirus is flagging
+the regular build, use the Stripped Build instead.
 
 ## Testers
 Thanks to everyone who tested WireMerge:
