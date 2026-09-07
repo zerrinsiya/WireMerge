@@ -8,7 +8,7 @@
 namespace wm {
 
 //Global version string.
-inline constexpr const char* kWireMergeVersion = "WireMerge_0.9.5";
+inline constexpr const char* kWireMergeVersion = "WireMerge_1.0";
 
 enum class LogLevel { Debug, Info, Warn, Error };
 

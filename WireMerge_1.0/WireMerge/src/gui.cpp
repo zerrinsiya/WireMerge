@@ -1120,6 +1120,23 @@ void Gui::RenderFrame() {
         RegisterFooterOccluder();
         constexpr float kLicensesWidth = 480.0f;
         constexpr float kLicensesBodyHeight = 320.0f;
+
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + kLicensesWidth);
+        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.9f, 1.0f), "About this build");
+        ImGui::TextWrapped("WireMerge is not code-signed. Signing through SignPath.io could "
+                            "not be completed due to insufficient funds on the maintainer's "
+                            "end. As a result, some antivirus and SmartScreen tools may flag "
+                            "the regular build.");
+        ImGui::TextWrapped("A Stripped Build is also available from the GitHub repository. "
+                            "It removes the automatic Android-tool download feature "
+                            "specifically, since that behavior is what appears to trigger "
+                            "most of those flags, and is otherwise functionally identical "
+                            "to this build.");
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, 10.0f));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 10.0f));
+
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + kLicensesWidth);
         ImGui::TextWrapped("WireMerge uses the following third-party software, libraries, and services:");
         ImGui::PopTextWrapPos();
