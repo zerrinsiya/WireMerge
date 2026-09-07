@@ -1,0 +1,3 @@
+//IDI_ICON1 must match the name used in gui.cpp's icon load call.
+
+IDI_ICON1 ICON "WireMerge.ico"
